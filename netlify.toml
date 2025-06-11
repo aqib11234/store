@@ -1,0 +1,9 @@
+[build]
+  base = "store"
+  command = "npm run build"
+  publish = "store/out"
+
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
