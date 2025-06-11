@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/5.1/ref/settings/
 from pathlib import Path
 from decouple import config
 import os
+import dj_database_url
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -29,9 +30,9 @@ DEBUG = config('DEBUG', default=True, cast=bool)
 
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='localhost,127.0.0.1', cast=lambda v: [s.strip() for s in v.split(',')])
 
-# Railway.app specific settings
-if 'RAILWAY_ENVIRONMENT' in os.environ:
-    ALLOWED_HOSTS.append('.railway.app')
+# Render.com specific settings
+if 'RENDER' in os.environ:
+    ALLOWED_HOSTS.append('.onrender.com')
     DEBUG = False
 
 
@@ -98,6 +99,10 @@ DATABASES = {
         "PORT": config('DATABASE_PORT', default='5432'),
     }
 }
+
+# Override database settings if DATABASE_URL is provided (for Render.com)
+if 'DATABASE_URL' in os.environ:
+    DATABASES['default'] = dj_database_url.parse(os.environ['DATABASE_URL'])
 
 
 # Password validation
