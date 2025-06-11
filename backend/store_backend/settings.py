@@ -35,6 +35,11 @@ if 'RENDER' in os.environ:
     ALLOWED_HOSTS.append('.onrender.com')
     DEBUG = False
 
+# PythonAnywhere specific settings
+if 'PYTHONANYWHERE_DOMAIN' in os.environ:
+    ALLOWED_HOSTS.append('.pythonanywhere.com')
+    DEBUG = False
+
 
 # Application definition
 
@@ -103,6 +108,22 @@ DATABASES = {
 # Override database settings if DATABASE_URL is provided (for Render.com)
 if 'DATABASE_URL' in os.environ:
     DATABASES['default'] = dj_database_url.parse(os.environ['DATABASE_URL'])
+
+# PythonAnywhere MySQL settings
+if 'PYTHONANYWHERE_DOMAIN' in os.environ:
+    DATABASES = {
+        'default': {
+            'ENGINE': 'django.db.backends.mysql',
+            'NAME': config('MYSQL_DATABASE', default=''),
+            'USER': config('MYSQL_USER', default=''),
+            'PASSWORD': config('MYSQL_PASSWORD', default=''),
+            'HOST': config('MYSQL_HOST', default=''),
+            'PORT': '',
+            'OPTIONS': {
+                'init_command': "SET sql_mode='STRICT_TRANS_TABLES'",
+            },
+        }
+    }
 
 
 # Password validation
