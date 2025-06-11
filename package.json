@@ -1,4 +1,10 @@
 {
+  "name": "store-deployment",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "cd store && npm install && npm run build",
+    "install": "cd store && npm install"
+  },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.14",
     "@radix-ui/react-label": "^2.1.7",
