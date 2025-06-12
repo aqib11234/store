@@ -191,7 +191,7 @@ REST_FRAMEWORK = {
 # CORS settings
 CORS_ALLOWED_ORIGINS = config(
     'CORS_ALLOWED_ORIGINS',
-    default='http://localhost:3000,http://127.0.0.1:3000,https://aqib11234.github.io',
+    default='http://localhost:3000,http://127.0.0.1:3000,https://aqib11234.github.io,https://tajjamul-traders.netlify.app',
     cast=lambda v: [s.strip() for s in v.split(',')]
 )
 

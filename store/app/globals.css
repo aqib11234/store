@@ -117,27 +117,27 @@
     @apply border-border outline-ring/50;
   }
   html {
-    font-size: 18px; /* Increase base font size from 16px to 18px */
+    font-size: 16px; /* Reset to standard 16px base font size */
   }
   body {
     @apply bg-background text-foreground;
-    font-size: 1rem; /* This will now be 18px instead of 16px */
+    font-size: 0.875rem; /* 14px - smaller base font */
   }
 
-  /* Increase specific text sizes */
-  h1 { @apply text-3xl; }
-  h2 { @apply text-2xl; }
-  h3 { @apply text-xl; }
-  h4 { @apply text-lg; }
+  /* Moderate text sizes */
+  h1 { @apply text-2xl; }
+  h2 { @apply text-xl; }
+  h3 { @apply text-lg; }
+  h4 { @apply text-base; }
 
-  /* Make buttons and inputs larger */
-  button { @apply text-base; }
-  input { @apply text-base; }
-  select { @apply text-base; }
-  textarea { @apply text-base; }
+  /* Standard button and input sizes */
+  button { @apply text-sm; }
+  input { @apply text-sm; }
+  select { @apply text-sm; }
+  textarea { @apply text-sm; }
 
-  /* Make table text larger */
-  table { @apply text-base; }
-  th { @apply text-lg font-bold; }
-  td { @apply text-base; }
+  /* Moderate table text sizes */
+  table { @apply text-sm; }
+  th { @apply text-base font-bold; }
+  td { @apply text-sm; }
 }
