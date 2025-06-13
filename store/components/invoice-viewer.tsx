@@ -140,22 +140,75 @@ export function InvoiceViewer() {
       <head>
         <title>${invoice.invoice_id}</title>
         <style>
-          body { font-family: Arial, sans-serif; margin: 20px; }
-          .header { text-align: center; margin-bottom: 30px; }
-          .invoice-details { margin-bottom: 20px; }
-          .invoice-details div { margin: 5px 0; }
-          table { width: 100%; border-collapse: collapse; margin: 20px 0; }
-          th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
-          th { background-color: #f2f2f2; }
+          body {
+            font-family: Arial, sans-serif;
+            margin: 10px;
+            font-size: 12px;
+            max-width: 300px;
+            margin: 0 auto;
+          }
+          .header {
+            text-align: center;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #333;
+            padding-bottom: 10px;
+          }
+          .business-name {
+            font-size: 18px;
+            font-weight: bold;
+            margin-bottom: 5px;
+            color: #333;
+          }
+          .invoice-title {
+            font-size: 14px;
+            margin: 5px 0;
+          }
+          .invoice-details {
+            margin-bottom: 15px;
+            font-size: 11px;
+          }
+          .invoice-details div { margin: 3px 0; }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 10px 0;
+            font-size: 11px;
+          }
+          th, td {
+            border: 1px solid #ddd;
+            padding: 4px;
+            text-align: left;
+          }
+          th {
+            background-color: #f2f2f2;
+            font-weight: bold;
+            font-size: 10px;
+          }
           .text-right { text-align: right; }
-          .total-row { font-weight: bold; background-color: #f9f9f9; }
-          .footer { margin-top: 30px; text-align: center; color: #666; }
+          .total-row {
+            font-weight: bold;
+            background-color: #f9f9f9;
+            font-size: 12px;
+          }
+          .footer {
+            margin-top: 15px;
+            text-align: center;
+            font-size: 10px;
+            color: #666;
+            border-top: 1px solid #ddd;
+            padding-top: 10px;
+          }
+          .business-footer {
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 5px;
+          }
         </style>
       </head>
       <body>
         <div class="header">
-          <h1>INVOICE</h1>
-          <h2>${invoice.invoice_id}</h2>
+          <div class="business-name">TAJJAMUL TRADERS</div>
+          <div class="invoice-title">${isSupplier ? 'PURCHASE INVOICE' : 'SALES INVOICE'}</div>
         </div>
 
         <div class="invoice-details">
@@ -171,33 +224,34 @@ export function InvoiceViewer() {
         <table>
           <thead>
             <tr>
-              <th>Item</th>
-              <th class="text-right">Quantity</th>
-              <th class="text-right">Price</th>
-              <th class="text-right">Total</th>
+              <th style="width: 40%;">Item</th>
+              <th class="text-right" style="width: 15%;">Qty</th>
+              <th class="text-right" style="width: 20%;">Price</th>
+              <th class="text-right" style="width: 25%;">Total</th>
             </tr>
           </thead>
           <tbody>
             ${invoice.items.map(item => `
               <tr>
-                <td>${item.product_name}</td>
+                <td style="word-wrap: break-word;">${item.product_name}</td>
                 <td class="text-right">${item.quantity}</td>
-                <td class="text-right">₨${Math.round(parseFloat(item.price)).toLocaleString('en-PK')}</td>
-                <td class="text-right">₨${Math.round(parseFloat(item.total)).toLocaleString('en-PK')}</td>
+                <td class="text-right">₨${Math.round(parseFloat(item.price))}</td>
+                <td class="text-right">₨${Math.round(parseFloat(item.total))}</td>
               </tr>
             `).join('')}
           </tbody>
           <tfoot>
             <tr class="total-row">
-              <td colspan="3"><strong>Total</strong></td>
-              <td class="text-right"><strong>₨${Math.round(parseFloat(invoice.total)).toLocaleString('en-PK')}</strong></td>
+              <td colspan="3"><strong>TOTAL</strong></td>
+              <td class="text-right"><strong>₨${Math.round(parseFloat(invoice.total))}</strong></td>
             </tr>
           </tfoot>
         </table>
 
         <div class="footer">
+          
           <p>Thank you for your business!</p>
-          <p>${activeTab === "sales" ? "Payment due within 30 days" : "Payment processed"}</p>
+          <p>${activeTab === "sales" ? "Return policy: Products can be returned within 7 days" : "Purchase completed"}</p>
         </div>
       </body>
       </html>
@@ -373,9 +427,9 @@ export function InvoiceViewer() {
               </Table>
             </CardContent>
             <CardFooter className="flex justify-between border-t p-4">
-              <div className="text-sm text-muted-foreground">Thank you for your business</div>
+              <div className="text-sm text-muted-foreground">Tajjamul Traders - Thank you!</div>
               <div className="text-sm font-medium">
-                {activeTab === "sales" ? "Payment due within 30 days" : "Payment processed"}
+                {activeTab === "sales" ? "Return within 7 days" : "Purchase completed"}
               </div>
             </CardFooter>
           </Card>

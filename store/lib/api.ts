@@ -246,6 +246,13 @@ class ApiClient {
   async getCustomers(): Promise<{ results: Customer[] }> {
     return this.request<{ results: Customer[] }>('/customers/');
   }
+
+  async createCustomer(customer: Omit<Customer, 'id' | 'created_at' | 'updated_at'>): Promise<Customer> {
+    return this.request<Customer>('/customers/', {
+      method: 'POST',
+      body: JSON.stringify(customer),
+    });
+  }
 }
 
 // Export singleton instance
@@ -268,3 +275,4 @@ export const getDashboardStats = () => apiClient.getDashboardStats();
 export const getSuppliers = () => apiClient.getSuppliers();
 export const createSupplier = (supplier: Omit<Supplier, 'id' | 'created_at' | 'updated_at'>) => apiClient.createSupplier(supplier);
 export const getCustomers = () => apiClient.getCustomers();
+export const createCustomer = (customer: Omit<Customer, 'id' | 'created_at' | 'updated_at'>) => apiClient.createCustomer(customer);

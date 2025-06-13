@@ -16,7 +16,6 @@ export default function DashboardPage() {
     <div className="flex flex-col gap-6 p-6">
       <DashboardHeader
         onProductAdded={handleDataRefresh}
-        onSaleCompleted={handleDataRefresh}
       />
       <DashboardStats key={`stats-${refreshKey}`} />
       <ProductsTable key={`products-${refreshKey}`} onDataChanged={handleDataRefresh} />

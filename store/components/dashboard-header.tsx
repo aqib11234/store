@@ -1,14 +1,15 @@
 "use client"
 
 import { AddProductDialog } from "@/components/add-product-dialog"
-import { SellProductDialog } from "@/components/sell-product-dialog"
+import { Button } from "@/components/ui/button"
+import { ShoppingCart } from "lucide-react"
+import Link from "next/link"
 
 interface DashboardHeaderProps {
   onProductAdded?: () => void
-  onSaleCompleted?: () => void
 }
 
-export function DashboardHeader({ onProductAdded, onSaleCompleted }: DashboardHeaderProps) {
+export function DashboardHeader({ onProductAdded }: DashboardHeaderProps) {
   return (
     <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
       <div>
@@ -16,7 +17,12 @@ export function DashboardHeader({ onProductAdded, onSaleCompleted }: DashboardHe
         <p className="text-muted-foreground">Manage your product inventory</p>
       </div>
       <div className="flex flex-col gap-2 sm:flex-row">
-        <SellProductDialog onSaleCompleted={onSaleCompleted} />
+        <Button asChild variant="default">
+          <Link href="/pos">
+            <ShoppingCart className="mr-2 h-4 w-4" />
+            Sell Products
+          </Link>
+        </Button>
         <AddProductDialog onProductAdded={onProductAdded} />
       </div>
     </div>
