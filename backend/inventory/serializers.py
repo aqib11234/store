@@ -1,9 +1,12 @@
 from rest_framework import serializers
 from .models import (
     Supplier, Customer, Product,
-    SalesInvoice, SalesInvoiceItem,
-    PurchaseInvoice, PurchaseInvoiceItem
+    SalesInvoice, SalesInvoiceItem, SalesLoanPayment,
+    PurchaseInvoice, PurchaseInvoiceItem, PurchaseLoanPayment,
+    AccountTransaction
 )
+from django.db import IntegrityError
+import uuid
 
 
 class SupplierSerializer(serializers.ModelSerializer):
@@ -22,13 +25,15 @@ class ProductSerializer(serializers.ModelSerializer):
     supplier_name = serializers.CharField(source='supplier.name', read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     unit_display = serializers.CharField(source='get_unit_display', read_only=True)
+    sale_price = serializers.DecimalField(max_digits=10, decimal_places=2)  # Allow sale_price to be writable
+    amount_paid = serializers.DecimalField(max_digits=10, decimal_places=2, write_only=True, required=False)  # For loan tracking
 
     class Meta:
         model = Product
         fields = [
-            'id', 'name', 'unit', 'unit_display', 'quantity', 'price',
+            'id', 'name', 'unit', 'unit_display', 'quantity', 'price', 'sale_price',  # Added sale_price
             'supplier', 'supplier_name', 'status', 'status_display',
-            'low_stock_threshold', 'description',
+            'low_stock_threshold', 'description', 'amount_paid',  # Added amount_paid
             'created_at', 'updated_at'
         ]
 
@@ -41,17 +46,26 @@ class SalesInvoiceItemSerializer(serializers.ModelSerializer):
         fields = ['id', 'product', 'product_name', 'quantity', 'price', 'total']
 
 
+class SalesLoanPaymentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SalesLoanPayment
+        fields = ['id', 'amount', 'date', 'notes', 'created_at']
+
+
 class SalesInvoiceSerializer(serializers.ModelSerializer):
     customer_name = serializers.CharField(source='customer.name', read_only=True)
     items = SalesInvoiceItemSerializer(source='salesinvoiceitem_set', many=True, read_only=True)
+    loan_payments = SalesLoanPaymentSerializer(many=True, read_only=True)
     time = serializers.DateTimeField(source='created_at', read_only=True)
+    payment_status_display = serializers.CharField(source='get_payment_status_display', read_only=True)
 
     class Meta:
         model = SalesInvoice
         fields = [
             'id', 'invoice_id', 'customer', 'customer_name', 'date', 'time',
             'subtotal', 'tax_rate', 'tax_amount', 'total', 'notes',
-            'items', 'created_at', 'updated_at'
+            'is_loan', 'amount_paid', 'remaining_balance', 'payment_status', 'payment_status_display',
+            'items', 'loan_payments', 'created_at', 'updated_at'
         ]
 
 
@@ -60,12 +74,21 @@ class CreateSalesInvoiceSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SalesInvoice
-        fields = ['customer', 'date', 'tax_rate', 'notes', 'items']
+        fields = ['customer', 'date', 'tax_rate', 'notes', 'items', 'is_loan', 'amount_paid']
 
     def create(self, validated_data):
         from django.db import transaction
+        import logging
+
+        logger = logging.getLogger(__name__)
+        logger.info(f"Creating sales invoice with data: {validated_data}")
 
         items_data = validated_data.pop('items')
+        logger.info(f"Items data: {items_data}")
+
+        # Handle loan fields
+        is_loan = validated_data.get('is_loan', False)
+        amount_paid = validated_data.get('amount_paid', 0)
 
         # Generate descriptive invoice ID
         from .models import Customer
@@ -143,8 +166,36 @@ class CreateSalesInvoiceSerializer(serializers.ModelSerializer):
                 # Final calculation of invoice totals
                 invoice.calculate_totals()
 
+                # Validate loan payment amount
+                if is_loan and amount_paid > invoice.total:
+                    raise serializers.ValidationError(f"Amount paid (₨{amount_paid}) cannot exceed total amount (₨{invoice.total})")
+
                 return invoice
 
+        except IntegrityError:
+            # Retry with a new unique invoice_id
+            import uuid
+            validated_data['invoice_id'] = f"SALE-{uuid.uuid4().hex[:8].upper()}"
+            # Create invoice with fallback ID
+            invoice = SalesInvoice.objects.create(**validated_data)
+
+            # Create invoice items
+            for item_data in items_data:
+                from .models import Product
+                from decimal import Decimal
+
+                product = Product.objects.get(id=item_data['product'])
+                price = Decimal(str(item_data['price']))
+
+                SalesInvoiceItem.objects.create(
+                    invoice=invoice,
+                    product=product,
+                    quantity=item_data['quantity'],
+                    price=price
+                )
+
+            invoice.calculate_totals()
+            return invoice
         except Exception as e:
             raise serializers.ValidationError(f"Error creating sales invoice: {str(e)}")
 
@@ -157,17 +208,26 @@ class PurchaseInvoiceItemSerializer(serializers.ModelSerializer):
         fields = ['id', 'product', 'product_name', 'quantity', 'price', 'total']
 
 
+class PurchaseLoanPaymentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PurchaseLoanPayment
+        fields = ['id', 'amount', 'date', 'notes', 'created_at']
+
+
 class PurchaseInvoiceSerializer(serializers.ModelSerializer):
     supplier_name = serializers.CharField(source='supplier.name', read_only=True)
     items = PurchaseInvoiceItemSerializer(source='purchaseinvoiceitem_set', many=True, read_only=True)
+    loan_payments = PurchaseLoanPaymentSerializer(many=True, read_only=True)
     time = serializers.DateTimeField(source='created_at', read_only=True)
+    payment_status_display = serializers.CharField(source='get_payment_status_display', read_only=True)
 
     class Meta:
         model = PurchaseInvoice
         fields = [
             'id', 'invoice_id', 'supplier', 'supplier_name', 'date', 'time',
             'subtotal', 'tax_rate', 'tax_amount', 'total', 'notes',
-            'items', 'created_at', 'updated_at'
+            'is_loan', 'amount_paid', 'remaining_balance', 'payment_status', 'payment_status_display',
+            'items', 'loan_payments', 'created_at', 'updated_at'
         ]
 
 
@@ -176,7 +236,7 @@ class CreatePurchaseInvoiceSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = PurchaseInvoice
-        fields = ['supplier', 'date', 'tax_rate', 'notes', 'items']
+        fields = ['supplier', 'date', 'tax_rate', 'notes', 'items', 'is_loan', 'amount_paid']
 
     def create(self, validated_data):
         from django.db import transaction
@@ -220,6 +280,14 @@ class CreatePurchaseInvoiceSerializer(serializers.ModelSerializer):
         # Set tax rate to 0 (no tax)
         validated_data['tax_rate'] = 0.00
 
+        # Handle loan fields
+        is_loan = validated_data.get('is_loan', False)
+        amount_paid = validated_data.get('amount_paid', 0)
+
+        # If not a loan, set amount_paid to 0 initially (will be set to total after calculation)
+        if not is_loan:
+            validated_data['amount_paid'] = 0
+
         try:
             with transaction.atomic():
                 # Create invoice
@@ -251,13 +319,23 @@ class CreatePurchaseInvoiceSerializer(serializers.ModelSerializer):
                         price=price
                     )
 
-                # Final calculation of invoice totals
+                # Final calculation of invoice totals (this handles loan payment status)
                 invoice.calculate_totals()
+
+                # Validate loan payment amount
+                if is_loan and amount_paid > invoice.total:
+                    raise serializers.ValidationError(f"Amount paid (₨{amount_paid}) cannot exceed total amount (₨{invoice.total})")
 
                 return invoice
 
         except Exception as e:
             raise serializers.ValidationError(f"Error creating purchase invoice: {str(e)}")
+
+
+class AccountTransactionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = AccountTransaction
+        fields = ['id', 'type', 'amount', 'description', 'date']
 
 
 # Dashboard Stats Serializer

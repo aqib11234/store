@@ -1,5 +1,5 @@
 from rest_framework import viewsets, status
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
@@ -10,7 +10,8 @@ from datetime import date
 from .models import (
     Supplier, Customer, Product,
     SalesInvoice, SalesInvoiceItem,
-    PurchaseInvoice, PurchaseInvoiceItem
+    PurchaseInvoice, PurchaseInvoiceItem, PurchaseLoanPayment,
+    AccountTransaction
 )
 from .serializers import (
     SupplierSerializer, CustomerSerializer, ProductSerializer,
@@ -18,8 +19,10 @@ from .serializers import (
     CreateSalesInvoiceSerializer,
     PurchaseInvoiceSerializer, PurchaseInvoiceItemSerializer,
     CreatePurchaseInvoiceSerializer,
-    DashboardStatsSerializer
+    DashboardStatsSerializer,
+    AccountTransactionSerializer
 )
+from rest_framework import permissions
 
 
 class SupplierViewSet(viewsets.ModelViewSet):
@@ -54,30 +57,79 @@ class ProductViewSet(viewsets.ModelViewSet):
         from datetime import date
         from decimal import Decimal
 
+        # Debug log for received data
+        print(f"Received data for product creation: {serializer.validated_data}")
+
+        # Normalize product and supplier names to avoid duplicates and confusion
+        normalized_name = serializer.validated_data['name'].strip().lower()
+        normalized_supplier = serializer.validated_data['supplier']
+        if hasattr(normalized_supplier, 'name'):
+            normalized_supplier_name = normalized_supplier.name.strip().lower()
+        else:
+            normalized_supplier_name = None
+
+        # Find supplier by normalized name if possible
+        if normalized_supplier_name:
+            supplier_obj = Supplier.objects.filter(name__iexact=normalized_supplier_name).first()
+        else:
+            supplier_obj = serializer.validated_data['supplier']
+
+        existing_product = Product.objects.filter(name__iexact=normalized_name, supplier=supplier_obj).first()
+        # Only update if the product actually exists in the database
+        if existing_product and Product.objects.filter(pk=existing_product.pk).exists():
+            existing_product.quantity += serializer.validated_data['quantity']
+            existing_product.price = serializer.validated_data['price']
+            existing_product.sale_price = serializer.validated_data['sale_price']
+            existing_product.low_stock_threshold = serializer.validated_data['low_stock_threshold']
+            existing_product.description = serializer.validated_data['description']
+            existing_product.save()
+            print(f"Updated existing product: {existing_product.name} (ID: {existing_product.id})")
+            return
+
+        # Set normalized name before saving
+        serializer.validated_data['name'] = normalized_name
         product = serializer.save()
+
+        # Debug log for sale_price
+        print(f"Creating product with sale_price: {serializer.validated_data.get('sale_price')}")
+
+        # Check if sale_price and purchase_price are the same
+        if serializer.validated_data.get('sale_price') == serializer.validated_data.get('price'):
+            print("Warning: Sale price and purchase price are the same!")
 
         # Create purchase invoice if product has supplier and quantity > 0
         if product.supplier and product.quantity > 0:
-            # Create purchase invoice with descriptive but short name (max 50 chars)
-            # Use same naming logic as sales invoices
-            product_short = product.name[:15]
-            supplier_short = product.supplier.name[:15]
-            invoice_id = f"P: {product_short} ← {supplier_short}"
+            import uuid
+            from datetime import datetime
+            
+            # Generate unique invoice ID using timestamp and UUID
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+            unique_id = uuid.uuid4().hex[:6].upper()
+            invoice_id = f"PUR-{timestamp}-{unique_id}"
 
-            # Ensure total length doesn't exceed 50 characters
-            if len(invoice_id) > 50:
-                # Fallback to even shorter format
-                invoice_id = f"P: {product.name[:10]} ← {product.supplier.name[:10]}"
-                if len(invoice_id) > 50:
-                    # Ultimate fallback with UUID (same as sales)
-                    import uuid
-                    invoice_id = f"PUR-{uuid.uuid4().hex[:8].upper()}"
+            # Ensure invoice_id is unique (extra safety check)
+            while PurchaseInvoice.objects.filter(invoice_id=invoice_id).exists():
+                unique_id = uuid.uuid4().hex[:6].upper()
+                invoice_id = f"PUR-{timestamp}-{unique_id}"
+
+            # Handle loan functionality
+            total_cost = Decimal(str(product.price)) * product.quantity
+            amount_paid = serializer.validated_data.get('amount_paid', total_cost)
+            if amount_paid is None:
+                amount_paid = total_cost
+            else:
+                amount_paid = Decimal(str(amount_paid))
+            
+            is_loan = amount_paid < total_cost
+
             invoice = PurchaseInvoice.objects.create(
                 invoice_id=invoice_id,
                 supplier=product.supplier,
                 date=date.today(),
                 tax_rate=Decimal('0.00'),  # No tax
-                notes=f"Auto-generated for new product: {product.name}"
+                notes=f"Auto-generated for new product: {product.name}{' (Loan)' if is_loan else ''}",
+                is_loan=is_loan,
+                amount_paid=amount_paid
             )
 
             # Create purchase invoice item (skip product update since product already has correct quantity)
@@ -89,7 +141,21 @@ class ProductViewSet(viewsets.ModelViewSet):
             )
             item.save(skip_product_update=True)
 
-            # Calculate totals (this will be done automatically by the model's save method)
+            # Calculate totals (this will update payment status and remaining balance)
+            invoice.calculate_totals()
+
+    def perform_update(self, serializer):
+        """Ensure sale_price is saved correctly during updates"""
+        # Debug log for sale_price during update
+        print(f"Updating product with sale_price: {serializer.validated_data.get('sale_price')}")
+        if serializer.validated_data.get('sale_price') == serializer.validated_data.get('price'):
+            print("Warning: Sale price and purchase price are the same during update!")
+        serializer.save()
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        print(f"Fetched products: {queryset}")
+        return queryset
 
 
 class SalesInvoiceViewSet(viewsets.ModelViewSet):
@@ -119,6 +185,74 @@ class SalesInvoiceViewSet(viewsets.ModelViewSet):
         self.perform_destroy(instance)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
+    @action(detail=False, methods=['get'])
+    def last_price(self, request):
+        """Get the last price at which a specific product was sold to a specific customer"""
+        customer_id = request.query_params.get('customer_id')
+        product_id = request.query_params.get('product_id')
+
+        if not customer_id or not product_id:
+            return Response(
+                {'error': 'Both customer_id and product_id are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            customer_id = int(customer_id)
+            product_id = int(product_id)
+        except ValueError:
+            return Response(
+                {'error': 'customer_id and product_id must be valid integers'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Check if customer exists
+        try:
+            customer = Customer.objects.get(id=customer_id)
+        except Customer.DoesNotExist:
+            return Response(
+                {'error': 'Customer not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Check if product exists
+        try:
+            product = Product.objects.get(id=product_id)
+        except Product.DoesNotExist:
+            return Response(
+                {'error': 'Product not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+
+        # Find the last sale of this product to this customer
+        last_sale_item = SalesInvoiceItem.objects.filter(
+            invoice__customer_id=customer_id,
+            product_id=product_id
+        ).select_related('invoice').order_by('-invoice__date', '-invoice__created_at').first()
+
+        if not last_sale_item:
+            return Response(
+                {
+                    'found': False,
+                    'message': f'No previous sales of "{product.name}" to "{customer.name}" found',
+                    'customer_name': customer.name,
+                    'product_name': product.name
+                }
+            )
+
+        return Response(
+            {
+                'found': True,
+                'last_price': str(last_sale_item.price),
+                'last_sale_date': last_sale_item.invoice.date,
+                'invoice_id': last_sale_item.invoice.invoice_id,
+                'quantity_sold': last_sale_item.quantity,
+                'customer_name': customer.name,
+                'product_name': product.name,
+                'message': f'Last sold "{product.name}" to "{customer.name}" for ₨{last_sale_item.price} on {last_sale_item.invoice.date}'
+            }
+        )
+
 
 class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
     queryset = PurchaseInvoice.objects.select_related('supplier').prefetch_related('purchaseinvoiceitem_set__product').all()
@@ -146,6 +280,64 @@ class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
         # Delete the invoice (items will be deleted via cascade)
         self.perform_destroy(instance)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(detail=True, methods=['post'])
+    def add_payment(self, request, pk=None):
+        """Add a payment to a loan invoice"""
+        invoice = self.get_object()
+
+        if not invoice.is_loan:
+            return Response(
+                {'error': 'Cannot add payment to non-loan invoice'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        amount = request.data.get('amount')
+        notes = request.data.get('notes', '')
+
+        if not amount:
+            return Response(
+                {'error': 'Amount is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            amount = float(amount)
+            if amount <= 0:
+                return Response(
+                    {'error': 'Amount must be positive'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            if invoice.amount_paid + amount > invoice.total:
+                return Response(
+                    {'error': f'Payment amount (₨{amount}) exceeds remaining balance (₨{invoice.remaining_balance})'},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
+
+            # Add the payment
+            invoice.add_payment(amount, notes)
+
+            # Return updated invoice data
+            serializer = self.get_serializer(invoice)
+            return Response(serializer.data)
+
+        except ValueError as e:
+            return Response(
+                {'error': str(e)},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            return Response(
+                {'error': f'Error adding payment: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class AccountTransactionViewSet(viewsets.ModelViewSet):
+    queryset = AccountTransaction.objects.all().order_by('-date')
+    serializer_class = AccountTransactionSerializer
+    permission_classes = [permissions.AllowAny]
 
 
 @api_view(['GET'])

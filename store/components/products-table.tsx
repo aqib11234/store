@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { getProducts, type Product } from "@/lib/api"
+import { getProducts, type Product, deleteProduct as deleteProductApi } from "@/lib/api"
 import { EditProductDialog } from "@/components/edit-product-dialog"
 import { DeleteProductDialog } from "@/components/delete-product-dialog"
 import { Button } from "@/components/ui/button"
@@ -11,9 +11,7 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Edit, Search, Trash, X } from "lucide-react"
-
-// Remove static data - will be fetched from API
+import { Edit, Search, Trash, X, RefreshCw } from "lucide-react"
 
 interface ProductsTableProps {
   onDataChanged?: () => void
@@ -33,10 +31,14 @@ export function ProductsTable({ onDataChanged }: ProductsTableProps) {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
 
   // Fetch products from API
-  const fetchProducts = async () => {
+  const fetchProducts = async (forceRefresh = false) => {
     try {
       setLoading(true)
-      const response = await getProducts()
+      // Add cache busting parameter to force fresh data
+      const params = forceRefresh ? new URLSearchParams({ _t: Date.now().toString() }) : undefined
+      const response = await getProducts(params)
+      console.log('Fetched products:', response.results.length, 'products')
+      console.log('Product names:', response.results.map(p => p.name))
       setProducts(response.results)
       setError(null)
     } catch (err) {
@@ -47,6 +49,12 @@ export function ProductsTable({ onDataChanged }: ProductsTableProps) {
     }
   }
 
+  // Force refresh products
+  const handleForceRefresh = () => {
+    console.log('Force refreshing products...')
+    fetchProducts(true)
+  }
+
   useEffect(() => {
     fetchProducts()
   }, [])
@@ -54,6 +62,11 @@ export function ProductsTable({ onDataChanged }: ProductsTableProps) {
   // Filter products based on search query and status filter
   useEffect(() => {
     let filtered = products
+
+    // Debug logs
+    console.log('Search Query:', searchQuery)
+    console.log('Active Filter:', activeFilter)
+    console.log('Products before filtering:', products.length)
 
     // Apply search filter
     if (searchQuery.trim()) {
@@ -81,6 +94,7 @@ export function ProductsTable({ onDataChanged }: ProductsTableProps) {
       })
     }
 
+    console.log('Filtered products:', filtered.length)
     setFilteredProducts(filtered)
   }, [products, searchQuery, activeFilter])
 
@@ -98,21 +112,43 @@ export function ProductsTable({ onDataChanged }: ProductsTableProps) {
 
   // Handle product updated
   const handleProductUpdated = () => {
-    fetchProducts() // Refresh the products list
+    console.log('Product updated, refreshing list...')
+    fetchProducts(true) // Force refresh with cache busting
     // Small delay to ensure backend has processed the update
     setTimeout(() => {
       onDataChanged?.() // Notify parent component to refresh dashboard stats
-    }, 100)
+    }, 500)
   }
 
   // Handle product deleted
   const handleProductDeleted = () => {
-    fetchProducts() // Refresh the products list
+    console.log('Product deleted, refreshing list...')
+    fetchProducts(true) // Force refresh with cache busting
     // Small delay to ensure backend has processed the deletion
     setTimeout(() => {
       onDataChanged?.() // Notify parent component to refresh dashboard stats
-    }, 100)
+    }, 500)
   }
+
+  // Bulk delete selected products
+  const handleBulkDelete = async () => {
+    if (selectedProducts.length === 0) return;
+    if (!window.confirm(`Are you sure you want to delete ${selectedProducts.length} selected products?`)) return;
+    const failed: number[] = [];
+    for (const id of selectedProducts) {
+      try {
+        await deleteProductApi(id);
+      } catch (error) {
+        console.error(`Failed to delete product with id ${id}:`, error);
+        failed.push(id);
+      }
+    }
+    setSelectedProducts([]);
+    fetchProducts(true); // Force refresh
+    if (failed.length > 0) {
+      alert(`Failed to delete the following product IDs: ${failed.join(', ')}`);
+    }
+  };
 
   const toggleProductSelection = (productId: number) => {
     setSelectedProducts((current) =>
@@ -148,7 +184,7 @@ export function ProductsTable({ onDataChanged }: ProductsTableProps) {
           <div className="text-center">
             <p className="text-red-600">{error}</p>
             <Button
-              onClick={() => window.location.reload()}
+              onClick={() => fetchProducts(true)}
               variant="outline"
               className="mt-2"
             >
@@ -176,6 +212,15 @@ export function ProductsTable({ onDataChanged }: ProductsTableProps) {
             />
           </div>
           <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleForceRefresh}
+              disabled={loading}
+            >
+              <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
             {activeFilter && activeFilter !== "all" && (
               <Badge variant="outline" className="flex items-center gap-1">
                 {activeFilter === "in-stock" ? "In Stock" :
@@ -201,7 +246,20 @@ export function ProductsTable({ onDataChanged }: ProductsTableProps) {
           </div>
         </div>
       </CardHeader>
-      <CardContent className="p-0">
+      <CardContent className="p-0" style={{ maxHeight: '500px', overflowY: 'auto' }}>
+        <div className="flex items-center gap-2 p-4">
+          <Button
+            variant="destructive"
+            size="sm"
+            disabled={selectedProducts.length === 0}
+            onClick={handleBulkDelete}
+          >
+            Delete Selected ({selectedProducts.length})
+          </Button>
+          <div className="text-sm text-muted-foreground">
+            Showing {filteredProducts.length} of {products.length} products
+          </div>
+        </div>
         <Table>
           <TableHeader>
             <TableRow>
@@ -215,7 +273,8 @@ export function ProductsTable({ onDataChanged }: ProductsTableProps) {
               <TableHead className="text-base font-bold">Product Name</TableHead>
               <TableHead className="text-base font-bold">Unit</TableHead>
               <TableHead className="text-base font-bold">Quantity</TableHead>
-              <TableHead className="text-base font-bold">Price</TableHead>
+              <TableHead className="text-base font-bold">Purchase Price</TableHead>
+              <TableHead className="text-base font-bold">Sale Price</TableHead>
               <TableHead className="text-base font-bold">Company/Person</TableHead>
               <TableHead className="text-base font-bold">Status</TableHead>
               <TableHead className="w-[100px] text-base font-bold">Actions</TableHead>
@@ -224,12 +283,18 @@ export function ProductsTable({ onDataChanged }: ProductsTableProps) {
           <TableBody>
             {filteredProducts.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={8} className="text-center py-8">
+                <TableCell colSpan={9} className="text-center py-8">
                   <div className="text-muted-foreground">
                     {searchQuery || activeFilter !== "all"
                       ? "No products found matching your criteria"
                       : "No products available"
                     }
+                    <div className="mt-2">
+                      <Button variant="outline" size="sm" onClick={handleForceRefresh}>
+                        <RefreshCw className="h-4 w-4 mr-2" />
+                        Refresh Products
+                      </Button>
+                    </div>
                   </div>
                 </TableCell>
               </TableRow>
@@ -246,7 +311,8 @@ export function ProductsTable({ onDataChanged }: ProductsTableProps) {
                 <TableCell className="font-semibold text-lg">{product.name}</TableCell>
                 <TableCell className="text-base">{product.unit_display}</TableCell>
                 <TableCell className="text-base">{product.quantity}</TableCell>
-                <TableCell className="text-base font-medium">₨{Math.round(parseFloat(product.price)).toLocaleString('en-PK')}</TableCell>
+                <TableCell className="text-base font-medium">₨{Math.round(parseFloat(product.price || '0')).toLocaleString('en-PK')}</TableCell>
+                <TableCell className="text-base font-medium">₨{Math.round(parseFloat(product.sale_price || '0')).toLocaleString('en-PK')}</TableCell>
                 <TableCell className="text-base">{product.supplier_name}</TableCell>
                 <TableCell className="text-base">
                   <Badge

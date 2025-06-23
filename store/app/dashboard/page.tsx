@@ -9,7 +9,11 @@ export default function DashboardPage() {
   const [refreshKey, setRefreshKey] = useState(0)
 
   const handleDataRefresh = () => {
-    setRefreshKey(prev => prev + 1)
+    console.log('Dashboard refresh triggered')
+    // Add a small delay to ensure the API has processed the changes
+    setTimeout(() => {
+      setRefreshKey(prev => prev + 1)
+    }, 1000) // 1 second delay
   }
 
   return (

@@ -30,6 +30,7 @@ export interface Product {
   unit_display: string;
   quantity: number;
   price: string;
+  sale_price?: string; // Added sale price field
   supplier: number;
   supplier_name: string;
   status: 'in_stock' | 'low_stock' | 'out_of_stock';
@@ -49,6 +50,14 @@ export interface InvoiceItem {
   total: string;
 }
 
+export interface SalesLoanPayment {
+  id: number;
+  amount: string;
+  date: string;
+  notes: string;
+  created_at: string;
+}
+
 export interface SalesInvoice {
   id: number;
   invoice_id: string;
@@ -61,9 +70,23 @@ export interface SalesInvoice {
   tax_amount: string;
   total: string;
   notes: string;
+  is_loan: boolean;
+  amount_paid: string;
+  remaining_balance: string;
+  payment_status: 'paid' | 'partial' | 'unpaid';
+  payment_status_display: string;
   items: InvoiceItem[];
+  loan_payments: SalesLoanPayment[];
   created_at: string;
   updated_at: string;
+}
+
+export interface PurchaseLoanPayment {
+  id: number;
+  amount: string;
+  date: string;
+  notes: string;
+  created_at: string;
 }
 
 export interface PurchaseInvoice {
@@ -78,7 +101,13 @@ export interface PurchaseInvoice {
   tax_amount: string;
   total: string;
   notes: string;
+  is_loan: boolean;
+  amount_paid: string;
+  remaining_balance: string;
+  payment_status: 'paid' | 'partial' | 'unpaid';
+  payment_status_display: string;
   items: InvoiceItem[];
+  loan_payments: PurchaseLoanPayment[];
   created_at: string;
   updated_at: string;
 }
@@ -92,6 +121,25 @@ export interface DashboardStats {
   today_purchases: string;
   total_customers: number;
   total_suppliers: number;
+}
+
+export interface AccountTransaction {
+  id: number;
+  type: 'add' | 'withdraw';
+  amount: string;
+  description: string;
+  date: string;
+}
+
+export interface LastSalePriceResponse {
+  found: boolean;
+  last_price?: string;
+  last_sale_date?: string;
+  invoice_id?: string;
+  quantity_sold?: number;
+  customer_name: string;
+  product_name: string;
+  message: string;
 }
 
 // API client class
@@ -148,10 +196,53 @@ class ApiClient {
     }
   }
 
-  // Products
+  // Products - Fetch all products by iterating through all pages
   async getProducts(params?: URLSearchParams): Promise<{ results: Product[] }> {
-    const query = params ? `?${params.toString()}` : '';
-    return this.request<{ results: Product[] }>(`/products/${query}`);
+    let allProducts: Product[] = [];
+    let page = 1;
+    let hasMore = true;
+    
+    console.log('Starting to fetch all products...');
+    
+    while (hasMore) {
+      try {
+        // Create new URLSearchParams for each page
+        const pageParams = new URLSearchParams(params || '');
+        pageParams.set('page', page.toString());
+        pageParams.set('page_size', '100'); // Use reasonable page size
+        
+        const query = `?${pageParams.toString()}`;
+        console.log(`Fetching page ${page} with query:`, query);
+        
+        const response = await this.request<{ 
+          results: Product[], 
+          next: string | null,
+          count: number,
+          previous: string | null
+        }>(`/products/${query}`);
+        
+        console.log(`Page ${page}: Got ${response.results.length} products`);
+        allProducts = [...allProducts, ...response.results];
+        
+        // Check if there are more pages
+        hasMore = response.next !== null;
+        page++;
+        
+        // Safety break to prevent infinite loops
+        if (page > 100) {
+          console.warn('Reached maximum page limit (100), stopping pagination');
+          break;
+        }
+      } catch (error) {
+        console.error(`Error fetching page ${page}:`, error);
+        break;
+      }
+    }
+    
+    console.log(`Total products fetched: ${allProducts.length}`);
+    console.log('All product names:', allProducts.map(p => p.name).sort());
+    
+    return { results: allProducts };
   }
 
   async getProduct(id: number): Promise<Product> {
@@ -178,9 +269,51 @@ class ApiClient {
     });
   }
 
-  // Sales Invoices
+  // Sales Invoices - Get all invoices by fetching all pages
   async getSalesInvoices(): Promise<{ results: SalesInvoice[] }> {
-    return this.request<{ results: SalesInvoice[] }>('/sales-invoices/');
+    let allInvoices: SalesInvoice[] = [];
+    let page = 1;
+    let hasMore = true;
+    
+    console.log('Starting to fetch all sales invoices...');
+    
+    while (hasMore) {
+      try {
+        const pageParams = new URLSearchParams();
+        pageParams.set('page', page.toString());
+        pageParams.set('page_size', '100'); // Get 100 items per page
+        
+        const query = `?${pageParams.toString()}`;
+        console.log(`Fetching sales invoices page ${page} with query:`, query);
+        
+        const response = await this.request<{ 
+          results: SalesInvoice[], 
+          next: string | null,
+          count: number,
+          previous: string | null
+        }>(`/sales-invoices/${query}`);
+        
+        console.log(`Sales invoices page ${page}: Got ${response.results.length} invoices`);
+        allInvoices = [...allInvoices, ...response.results];
+        
+        // Check if there are more pages
+        hasMore = response.next !== null;
+        page++;
+        
+        // Safety break to prevent infinite loops
+        if (page > 100) {
+          console.warn('Reached maximum page limit (100), stopping pagination');
+          break;
+        }
+      } catch (error) {
+        console.error(`Error fetching sales invoices page ${page}:`, error);
+        break;
+      }
+    }
+    
+    console.log(`Total sales invoices fetched: ${allInvoices.length}`);
+    
+    return { results: allInvoices };
   }
 
   async getSalesInvoice(id: number): Promise<SalesInvoice> {
@@ -197,6 +330,8 @@ class ApiClient {
     }>;
     tax_rate?: number;
     notes?: string;
+    is_loan?: boolean;
+    amount_paid?: number;
   }): Promise<SalesInvoice> {
     return this.request<SalesInvoice>('/sales-invoices/', {
       method: 'POST',
@@ -204,9 +339,55 @@ class ApiClient {
     });
   }
 
-  // Purchase Invoices
+  async getLastSalePrice(customerId: number, productId: number): Promise<LastSalePriceResponse> {
+    return this.request<LastSalePriceResponse>(`/sales-invoices/last_price/?customer_id=${customerId}&product_id=${productId}`);
+  }
+
+  // Purchase Invoices - Get all invoices by fetching all pages
   async getPurchaseInvoices(): Promise<{ results: PurchaseInvoice[] }> {
-    return this.request<{ results: PurchaseInvoice[] }>('/purchase-invoices/');
+    let allInvoices: PurchaseInvoice[] = [];
+    let page = 1;
+    let hasMore = true;
+    
+    console.log('Starting to fetch all purchase invoices...');
+    
+    while (hasMore) {
+      try {
+        const pageParams = new URLSearchParams();
+        pageParams.set('page', page.toString());
+        pageParams.set('page_size', '100'); // Get 100 items per page
+        
+        const query = `?${pageParams.toString()}`;
+        console.log(`Fetching purchase invoices page ${page} with query:`, query);
+        
+        const response = await this.request<{ 
+          results: PurchaseInvoice[], 
+          next: string | null,
+          count: number,
+          previous: string | null
+        }>(`/purchase-invoices/${query}`);
+        
+        console.log(`Purchase invoices page ${page}: Got ${response.results.length} invoices`);
+        allInvoices = [...allInvoices, ...response.results];
+        
+        // Check if there are more pages
+        hasMore = response.next !== null;
+        page++;
+        
+        // Safety break to prevent infinite loops
+        if (page > 100) {
+          console.warn('Reached maximum page limit (100), stopping pagination');
+          break;
+        }
+      } catch (error) {
+        console.error(`Error fetching purchase invoices page ${page}:`, error);
+        break;
+      }
+    }
+    
+    console.log(`Total purchase invoices fetched: ${allInvoices.length}`);
+    
+    return { results: allInvoices };
   }
 
   async getPurchaseInvoice(id: number): Promise<PurchaseInvoice> {
@@ -222,6 +403,45 @@ class ApiClient {
   async deletePurchaseInvoice(id: number): Promise<void> {
     await this.request<void>(`/purchase-invoices/${id}/`, {
       method: 'DELETE',
+    });
+  }
+
+  async createPurchaseInvoice(invoice: {
+    supplier: number;
+    date: string;
+    items: Array<{
+      product: number;
+      quantity: number;
+      price: string;
+    }>;
+    tax_rate?: number;
+    notes?: string;
+    is_loan?: boolean;
+    amount_paid?: number;
+  }): Promise<PurchaseInvoice> {
+    return this.request<PurchaseInvoice>('/purchase-invoices/', {
+      method: 'POST',
+      body: JSON.stringify(invoice),
+    });
+  }
+
+  async addLoanPayment(invoiceId: number, payment: {
+    amount: number;
+    notes?: string;
+  }): Promise<PurchaseLoanPayment> {
+    return this.request<PurchaseLoanPayment>(`/purchase-invoices/${invoiceId}/add-payment/`, {
+      method: 'POST',
+      body: JSON.stringify(payment),
+    });
+  }
+
+  async addSalesLoanPayment(invoiceId: number, payment: {
+    amount: number;
+    notes?: string;
+  }): Promise<SalesLoanPayment> {
+    return this.request<SalesLoanPayment>(`/sales-invoices/${invoiceId}/add-payment/`, {
+      method: 'POST',
+      body: JSON.stringify(payment),
     });
   }
 
@@ -253,6 +473,23 @@ class ApiClient {
       body: JSON.stringify(customer),
     });
   }
+
+  // Account Transactions
+  async getAccountTransactions(): Promise<{ results: AccountTransaction[] }> {
+    return this.request<{ results: AccountTransaction[] }>('/account-transactions/');
+  }
+
+  async createAccountTransaction(data: {
+    type: 'add' | 'withdraw';
+    amount: string;
+    description: string;
+  }): Promise<AccountTransaction> {
+    return this.request<AccountTransaction>('/account-transactions/', {
+      method: 'POST',
+      body: JSON.stringify(data),
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
 }
 
 // Export singleton instance
@@ -271,8 +508,14 @@ export const deleteSalesInvoice = (id: number) => apiClient.deleteSalesInvoice(i
 export const getPurchaseInvoices = () => apiClient.getPurchaseInvoices();
 export const getPurchaseInvoice = (id: number) => apiClient.getPurchaseInvoice(id);
 export const deletePurchaseInvoice = (id: number) => apiClient.deletePurchaseInvoice(id);
+export const createPurchaseInvoice = (invoice: Parameters<typeof apiClient.createPurchaseInvoice>[0]) => apiClient.createPurchaseInvoice(invoice);
+export const addLoanPayment = (invoiceId: number, payment: Parameters<typeof apiClient.addLoanPayment>[1]) => apiClient.addLoanPayment(invoiceId, payment);
+export const addSalesLoanPayment = (invoiceId: number, payment: Parameters<typeof apiClient.addSalesLoanPayment>[1]) => apiClient.addSalesLoanPayment(invoiceId, payment);
 export const getDashboardStats = () => apiClient.getDashboardStats();
 export const getSuppliers = () => apiClient.getSuppliers();
 export const createSupplier = (supplier: Omit<Supplier, 'id' | 'created_at' | 'updated_at'>) => apiClient.createSupplier(supplier);
 export const getCustomers = () => apiClient.getCustomers();
 export const createCustomer = (customer: Omit<Customer, 'id' | 'created_at' | 'updated_at'>) => apiClient.createCustomer(customer);
+export const getAccountTransactions = () => apiClient.getAccountTransactions();
+export const createAccountTransaction = (data: Parameters<typeof apiClient.createAccountTransaction>[0]) => apiClient.createAccountTransaction(data);
+export const getLastSalePrice = (customerId: number, productId: number) => apiClient.getLastSalePrice(customerId, productId);

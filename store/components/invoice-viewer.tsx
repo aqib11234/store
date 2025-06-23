@@ -18,6 +18,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
+import { AddLoanPaymentDialog } from "./add-loan-payment-dialog"
 
 export function InvoiceViewer() {
   const [activeTab, setActiveTab] = useState("sales")
@@ -36,6 +37,9 @@ export function InvoiceViewer() {
           getSalesInvoices(),
           getPurchaseInvoices()
         ])
+
+        console.log('Sales invoices fetched:', salesResponse.results.length)
+        console.log('Purchase invoices fetched:', purchaseResponse.results.length)
 
         setSalesInvoices(salesResponse.results)
         setPurchaseInvoices(purchaseResponse.results)
@@ -134,6 +138,15 @@ export function InvoiceViewer() {
     const partnerName = isSupplier ? (invoice as PurchaseInvoice).supplier_name : (invoice as SalesInvoice).customer_name
     const partnerLabel = isSupplier ? 'Supplier' : 'Customer'
 
+    // Debug logging to see what data we have
+    console.log('Generating invoice for:', invoice.invoice_id)
+    console.log('Is supplier:', isSupplier)
+    console.log('Amount paid:', invoice.amount_paid)
+    console.log('Is loan:', invoice.is_loan)
+
+    // Check if we have valid payment data - amount_paid is a string from the API
+    const paidAmount = parseFloat(invoice.amount_paid || '0')
+
     return `
       <!DOCTYPE html>
       <html>
@@ -142,74 +155,113 @@ export function InvoiceViewer() {
         <style>
           body {
             font-family: Arial, sans-serif;
-            margin: 10px;
-            font-size: 12px;
-            max-width: 300px;
+            margin: 20px;
+            font-size: 14px;
+            max-width: 400px;
             margin: 0 auto;
-          }
-          .header {
-            text-align: center;
-            margin-bottom: 15px;
-            border-bottom: 2px solid #333;
-            padding-bottom: 10px;
+            line-height: 1.6;
           }
           .business-name {
+            text-align: center;
             font-size: 18px;
             font-weight: bold;
-            margin-bottom: 5px;
+            margin-bottom: 10px;
             color: #333;
           }
-          .invoice-title {
-            font-size: 14px;
-            margin: 5px 0;
+          .invoice-type {
+            text-align: center;
+            font-size: 16px;
+            margin-bottom: 20px;
+            color: #333;
           }
           .invoice-details {
-            margin-bottom: 15px;
-            font-size: 11px;
+            margin-bottom: 20px;
+            font-size: 14px;
           }
-          .invoice-details div { margin: 3px 0; }
-          table {
-            width: 100%;
-            border-collapse: collapse;
-            margin: 10px 0;
-            font-size: 11px;
-          }
-          th, td {
-            border: 1px solid #ddd;
-            padding: 4px;
-            text-align: left;
-          }
-          th {
-            background-color: #f2f2f2;
+          .invoice-details div { 
+            margin: 5px 0; 
             font-weight: bold;
-            font-size: 10px;
           }
-          .text-right { text-align: right; }
-          .total-row {
-            font-weight: bold;
-            background-color: #f9f9f9;
-            font-size: 12px;
-          }
-          .footer {
-            margin-top: 15px;
+          .actions {
             text-align: center;
-            font-size: 10px;
-            color: #666;
-            border-top: 1px solid #ddd;
+            margin: 15px 0;
+            font-weight: bold;
+            font-size: 14px;
+            color: #333;
+          }
+          .items-header {
+            font-weight: bold;
+            font-size: 14px;
+            margin: 15px 0 10px 0;
+            display: flex;
+            justify-content: space-between;
+            border-bottom: 1px solid #333;
+            padding-bottom: 5px;
+          }
+          .item-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 14px;
+            margin: 3px 0;
+            align-items: center;
+          }
+          .item-name {
+            flex: 2;
+          }
+          .item-qty {
+            flex: 1;
+            text-align: center;
+          }
+          .item-price {
+            flex: 1;
+            text-align: right;
+          }
+          .item-total {
+            flex: 1;
+            text-align: right;
+          }
+          .totals-section {
+            margin-top: 20px;
+            border-top: 2px solid #333;
             padding-top: 10px;
           }
-          .business-footer {
+          .total-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 16px;
             font-weight: bold;
-            color: #333;
-            margin-bottom: 5px;
+            margin: 5px 0;
+          }
+          .payment-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 14px;
+            font-weight: bold;
+            margin: 5px 0;
+          }
+          .balance-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 14px;
+            font-weight: bold;
+            margin: 5px 0;
+          }
+          .footer {
+            margin-top: 20px;
+            text-align: center;
+            font-size: 12px;
+            color: #666;
+            border-top: 1px solid #ddd;
+            padding-top: 15px;
+          }
+          .footer p {
+            margin: 5px 0;
           }
         </style>
       </head>
       <body>
-        <div class="header">
-          <div class="business-name">TAJJAMUL TRADERS</div>
-          <div class="invoice-title">${isSupplier ? 'PURCHASE INVOICE' : 'SALES INVOICE'}</div>
-        </div>
+        <div class="business-name">TAJJAMUL TRADERS</div>
+        <div class="invoice-type">${isSupplier ? 'PURCHASE INVOICE' : 'SALES INVOICE'}</div>
 
         <div class="invoice-details">
           <div><strong>Date:</strong> ${invoice.date}</div>
@@ -221,37 +273,50 @@ export function InvoiceViewer() {
           <div><strong>${partnerLabel}:</strong> ${partnerName}</div>
         </div>
 
-        <table>
-          <thead>
-            <tr>
-              <th style="width: 40%;">Item</th>
-              <th class="text-right" style="width: 15%;">Qty</th>
-              <th class="text-right" style="width: 20%;">Price</th>
-              <th class="text-right" style="width: 25%;">Total</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${invoice.items.map(item => `
-              <tr>
-                <td style="word-wrap: break-word;">${item.product_name}</td>
-                <td class="text-right">${item.quantity}</td>
-                <td class="text-right">₨${Math.round(parseFloat(item.price))}</td>
-                <td class="text-right">₨${Math.round(parseFloat(item.total))}</td>
-              </tr>
-            `).join('')}
-          </tbody>
-          <tfoot>
-            <tr class="total-row">
-              <td colspan="3"><strong>TOTAL</strong></td>
-              <td class="text-right"><strong>₨${Math.round(parseFloat(invoice.total))}</strong></td>
-            </tr>
-          </tfoot>
-        </table>
+        <div class="actions">
+          <strong>Print</strong> <strong>Download</strong> <strong>Delete</strong>
+        </div>
+
+        <div class="items-header">
+          <div class="item-name">Item</div>
+          <div class="item-qty">Qty</div>
+          <div class="item-price">Price</div>
+          <div class="item-total">Total</div>
+        </div>
+
+        ${invoice.items.map(item => `
+          <div class="item-row">
+            <div class="item-name">${item.product_name}</div>
+            <div class="item-qty">${item.quantity}</div>
+            <div class="item-price">₨${Math.round(parseFloat(item.price)).toLocaleString('en-PK')}</div>
+            <div class="item-total">₨${Math.round(parseFloat(item.total)).toLocaleString('en-PK')}</div>
+          </div>
+        `).join('')}
+
+        <div class="totals-section">
+          <div class="total-row">
+            <span>TOTAL</span>
+            <span>₨${Math.round(parseFloat(invoice.total)).toLocaleString('en-PK')}</span>
+          </div>
+          <div class="payment-row">
+            <span>AMOUNT PAID</span>
+            <span>₨${Math.round(paidAmount).toLocaleString('en-PK')}</span>
+          </div>
+          ${invoice.is_loan ? `
+          <div class="balance-row">
+            <span>REMAINING BALANCE</span>
+            <span>₨${Math.round(parseFloat(invoice.remaining_balance)).toLocaleString('en-PK')}</span>
+          </div>
+          <div class="payment-row">
+            <span>PAYMENT STATUS</span>
+            <span>${invoice.payment_status === 'paid' ? 'Fully Paid' : invoice.payment_status === 'partial' ? 'Partially Paid' : 'Unpaid'}</span>
+          </div>
+          ` : ''}
+        </div>
 
         <div class="footer">
-          
           <p>Thank you for your business!</p>
-          <p>${activeTab === "sales" ? "Return policy: Products can be returned within 7 days" : "Purchase completed"}</p>
+          <p>${isSupplier ? "Purchase completed" : "Return policy: Products can be returned within 7 days"}</p>
         </div>
       </body>
       </html>
@@ -285,20 +350,20 @@ export function InvoiceViewer() {
   return (
     <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
       <TabsList className="grid w-full grid-cols-2 mb-6">
-        <TabsTrigger value="sales">Sales Invoices</TabsTrigger>
-        <TabsTrigger value="purchases">Purchase Invoices</TabsTrigger>
+        <TabsTrigger value="sales">Sales Invoices ({salesInvoices.length})</TabsTrigger>
+        <TabsTrigger value="purchases">Purchase Invoices ({purchaseInvoices.length})</TabsTrigger>
       </TabsList>
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
         <div className="md:col-span-1">
           <Card>
             <CardHeader>
-              <CardTitle>{activeTab === "sales" ? "Sales Invoices" : "Purchase Invoices"}</CardTitle>
-              <CardDescription>Select an invoice to view details</CardDescription>
+              <CardTitle className="text-2xl font-bold">{activeTab === "sales" ? "Sales Invoices" : "Purchase Invoices"}</CardTitle>
+              <CardDescription className="text-lg">Select an invoice to view details</CardDescription>
             </CardHeader>
             <CardContent className="p-0">
               <TabsContent value="sales" className="m-0">
-                <div className="space-y-1 p-4">
+                <div className="space-y-1 p-4 max-h-96 overflow-y-auto">
                   {salesInvoices.map((invoice) => (
                     <Button
                       key={invoice.id}
@@ -321,7 +386,7 @@ export function InvoiceViewer() {
                 </div>
               </TabsContent>
               <TabsContent value="purchases" className="m-0">
-                <div className="space-y-1 p-4">
+                <div className="space-y-1 p-4 max-h-96 overflow-y-auto">
                   {purchaseInvoices.map((invoice) => (
                     <Button
                       key={invoice.id}
@@ -364,6 +429,15 @@ export function InvoiceViewer() {
                   </CardDescription>
                 </div>
               <div className="flex gap-2">
+                {activeTab === "purchase" && selectedInvoice.is_loan && selectedInvoice.payment_status !== 'paid' && (
+                  <AddLoanPaymentDialog
+                    invoice={selectedInvoice as PurchaseInvoice}
+                    onPaymentAdded={() => {
+                      // Refresh the invoices to show updated payment status
+                      window.location.reload()
+                    }}
+                  />
+                )}
                 <Button variant="outline" size="sm" onClick={handlePrint}>
                   <Printer className="mr-2 h-4 w-4" />
                   Print
@@ -423,13 +497,46 @@ export function InvoiceViewer() {
                     <TableCell colSpan={3} className="text-base font-bold">Total</TableCell>
                     <TableCell className="text-right text-base font-bold">₨{Math.round(parseFloat(selectedInvoice.total)).toLocaleString('en-PK')}</TableCell>
                   </TableRow>
+                  {/* Show Amount Paid for both sales and purchase invoices */}
+                  <TableRow>
+                    <TableCell colSpan={3} className="text-base font-bold text-blue-600">Amount Paid</TableCell>
+                    <TableCell className="text-right text-base font-bold text-blue-600">₨{Math.round(parseFloat(selectedInvoice.amount_paid || '0')).toLocaleString('en-PK')}</TableCell>
+                  </TableRow>
+                  {/* Show remaining balance and payment status for loans (both sales and purchase) */}
+                  {selectedInvoice.is_loan && (
+                    <>
+                      <TableRow>
+                        <TableCell colSpan={3} className="text-sm font-medium text-red-600">Remaining Balance</TableCell>
+                        <TableCell className="text-right text-sm font-medium text-red-600">₨{Math.round(parseFloat(selectedInvoice.remaining_balance)).toLocaleString('en-PK')}</TableCell>
+                      </TableRow>
+                      <TableRow>
+                        <TableCell colSpan={3} className="text-sm font-medium">Payment Status</TableCell>
+                        <TableCell className="text-right text-sm font-medium">
+                          <span className={`px-2 py-1 rounded-full text-xs ${
+                            selectedInvoice.payment_status === 'paid'
+                              ? 'bg-green-100 text-green-800'
+                              : selectedInvoice.payment_status === 'partial'
+                              ? 'bg-yellow-100 text-yellow-800'
+                              : 'bg-red-100 text-red-800'
+                          }`}>
+                            {selectedInvoice.payment_status_display}
+                          </span>
+                        </TableCell>
+                      </TableRow>
+                    </>
+                  )}
                 </TableFooter>
               </Table>
             </CardContent>
             <CardFooter className="flex justify-between border-t p-4">
               <div className="text-sm text-muted-foreground">Tajjamul Traders - Thank you!</div>
               <div className="text-sm font-medium">
-                {activeTab === "sales" ? "Return within 7 days" : "Purchase completed"}
+                {activeTab === "sales"
+                  ? "Return within 7 days"
+                  : selectedInvoice.is_loan
+                    ? `Loan - ${selectedInvoice.payment_status_display}`
+                    : "Purchase completed"
+                }
               </div>
             </CardFooter>
           </Card>

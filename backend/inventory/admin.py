@@ -1,8 +1,8 @@
 from django.contrib import admin
 from .models import (
     Supplier, Customer, Product,
-    SalesInvoice, SalesInvoiceItem,
-    PurchaseInvoice, PurchaseInvoiceItem
+    SalesInvoice, SalesInvoiceItem, SalesLoanPayment,
+    PurchaseInvoice, PurchaseInvoiceItem, PurchaseLoanPayment
 )
 
 
@@ -35,10 +35,17 @@ class SalesInvoiceItemInline(admin.TabularInline):
 
 @admin.register(SalesInvoice)
 class SalesInvoiceAdmin(admin.ModelAdmin):
-    list_display = ['invoice_id', 'customer', 'date', 'total', 'created_at']
+    list_display = ['invoice_id', 'customer', 'date', 'total', 'amount_paid', 'payment_status', 'created_at']
     search_fields = ['invoice_id', 'customer__name']
-    list_filter = ['date', 'created_at']
+    list_filter = ['date', 'payment_status', 'is_loan', 'created_at']
     inlines = [SalesInvoiceItemInline]
+
+
+@admin.register(SalesLoanPayment)
+class SalesLoanPaymentAdmin(admin.ModelAdmin):
+    list_display = ['invoice', 'amount', 'date', 'created_at']
+    search_fields = ['invoice__invoice_id', 'notes']
+    list_filter = ['date', 'created_at']
 
 
 class PurchaseInvoiceItemInline(admin.TabularInline):
@@ -48,7 +55,14 @@ class PurchaseInvoiceItemInline(admin.TabularInline):
 
 @admin.register(PurchaseInvoice)
 class PurchaseInvoiceAdmin(admin.ModelAdmin):
-    list_display = ['invoice_id', 'supplier', 'date', 'total', 'created_at']
+    list_display = ['invoice_id', 'supplier', 'date', 'total', 'amount_paid', 'payment_status', 'created_at']
     search_fields = ['invoice_id', 'supplier__name']
-    list_filter = ['date', 'created_at']
+    list_filter = ['date', 'payment_status', 'is_loan', 'created_at']
     inlines = [PurchaseInvoiceItemInline]
+
+
+@admin.register(PurchaseLoanPayment)
+class PurchaseLoanPaymentAdmin(admin.ModelAdmin):
+    list_display = ['invoice', 'amount', 'date', 'created_at']
+    search_fields = ['invoice__invoice_id', 'notes']
+    list_filter = ['date', 'created_at']

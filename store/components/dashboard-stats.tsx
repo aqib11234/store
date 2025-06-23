@@ -3,12 +3,17 @@
 import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Package, AlertTriangle, DollarSign, ShoppingBag, ShoppingCart, TrendingUp } from "lucide-react"
-import { getDashboardStats, type DashboardStats } from "@/lib/api"
+import { getDashboardStats, type DashboardStats, getAccountTransactions, createAccountTransaction, AccountTransaction } from "@/lib/api"
+import { Switch } from "@/components/ui/switch"
+import { AccountMoneyDialog } from "@/components/account-money-dialog"
 
 export function DashboardStats() {
   const [stats, setStats] = useState<DashboardStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [showTotalPurchases, setShowTotalPurchases] = useState(true)
+  const [moneyDialogOpen, setMoneyDialogOpen] = useState(false)
+  const [transactions, setTransactions] = useState<AccountTransaction[]>([])
 
   useEffect(() => {
     const fetchStats = async () => {
@@ -26,6 +31,13 @@ export function DashboardStats() {
     }
 
     fetchStats()
+  }, [])
+
+  // Fetch transactions from backend
+  useEffect(() => {
+    getAccountTransactions()
+      .then(res => setTransactions(res.results))
+      .catch(() => setTransactions([]))
   }, [])
 
   if (loading) {
@@ -75,75 +87,100 @@ export function DashboardStats() {
     )
   }
 
+  // Calculate net balance from account transactions (this should match account invoices page)
+  const netBalance = transactions.reduce((sum, t) => 
+    sum + (t.type === 'add' ? parseFloat(t.amount) : -parseFloat(t.amount)), 0
+  )
+
   return (
     <div className="space-y-4">
-      {/* First Row - Inventory & Sales */}
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+      {/* First Row - Total Products, Low Stock, Total Sales */}
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Products</CardTitle>
+            <CardTitle className="text-lg font-medium">Total Products</CardTitle>
             <Package className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{stats.total_products.toLocaleString()}</div>
-            <p className="text-xs text-muted-foreground">Products in inventory</p>
+            <p className="text-lg font-medium">Products in inventory</p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Low Stock</CardTitle>
+            <CardTitle className="text-lg font-medium">Low Stock</CardTitle>
             <AlertTriangle className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{stats.low_stock_count}</div>
-            <p className="text-xs text-muted-foreground">Products below threshold</p>
+            <p className="text-lg font-medium">Products below threshold</p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Sales</CardTitle>
+            <CardTitle className="text-lg font-medium">Total Sales</CardTitle>
             <DollarSign className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold">₨{Math.round(parseFloat(stats.total_sales)).toLocaleString('en-PK')}</div>
-            <p className="text-sm text-muted-foreground">All time sales</p>
+            <p className="text-base text-muted-foreground">All time sales</p>
+          </CardContent>
+        </Card>
+      </div>
+      {/* Second Row - Total Money, Purchases (toggle), Today's Sales */}
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+        <Card onClick={() => setMoneyDialogOpen(true)} className="cursor-pointer hover:shadow-lg transition-shadow">
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-lg font-medium">Account Balance</CardTitle>
+            <DollarSign className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className={`text-3xl font-bold ${netBalance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+              ₨{Math.round(netBalance).toLocaleString('en-PK')}
+            </div>
+            <p className="text-base text-muted-foreground">
+              {netBalance >= 0 ? 'Available balance' : 'Overdraft amount'}
+            </p>
           </CardContent>
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Today&apos;s Sales</CardTitle>
+            <div className="flex flex-col gap-1">
+              <CardTitle className="text-lg font-medium">{showTotalPurchases ? "Total Purchases" : "Today's Purchases"}</CardTitle>
+              <div className="flex items-center gap-2 mt-1">
+                <span className="text-base">Show</span>
+                <Switch checked={showTotalPurchases} onCheckedChange={setShowTotalPurchases} id="toggle-purchases" />
+                <span className="text-base">{showTotalPurchases ? "Total" : "Today"}</span>
+              </div>
+            </div>
+            <ShoppingCart className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-3xl font-bold">₨{Math.round(parseFloat(showTotalPurchases ? stats.total_purchases : stats.today_purchases)).toLocaleString('en-PK')}</div>
+            <p className="text-base text-muted-foreground">{showTotalPurchases ? "All time purchases" : "Purchases made today"}</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-lg font-medium">Today&apos;s Sales</CardTitle>
             <ShoppingBag className="h-4 w-4 text-muted-foreground" />
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold">₨{Math.round(parseFloat(stats.today_sales)).toLocaleString('en-PK')}</div>
-            <p className="text-sm text-muted-foreground">Sales processed today</p>
+            <p className="text-base text-muted-foreground">Sales processed today</p>
           </CardContent>
         </Card>
       </div>
-
-      {/* Second Row - Purchases */}
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Total Purchases</CardTitle>
-            <ShoppingCart className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold">₨{Math.round(parseFloat(stats.total_purchases)).toLocaleString('en-PK')}</div>
-            <p className="text-sm text-muted-foreground">All time purchases</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-sm font-medium">Today&apos;s Purchases</CardTitle>
-            <TrendingUp className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold">₨{Math.round(parseFloat(stats.today_purchases)).toLocaleString('en-PK')}</div>
-            <p className="text-sm text-muted-foreground">Purchases made today</p>
-          </CardContent>
-        </Card>
-      </div>
+      <AccountMoneyDialog
+        open={moneyDialogOpen}
+        onOpenChange={setMoneyDialogOpen}
+        onSubmit={async (type, amount, description) => {
+          await createAccountTransaction({ type, amount: amount.toString(), description })
+          // Refresh transactions from backend
+          const res = await getAccountTransactions()
+          setTransactions(res.results)
+        }}
+      />
     </div>
   )
 }

@@ -1,25 +1,26 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { getProducts, getCustomers, createSalesInvoice, createCustomer, type Product, type Customer } from "@/lib/api"
+import { getProducts, getCustomers, createSalesInvoice, createCustomer, getLastSalePrice, type Product, type Customer } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-
-
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
 import { Search, Plus, Minus, Trash2, ShoppingCart, Receipt, User } from "lucide-react"
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog"
 import { toast } from "sonner"
 
-
 interface CartItem {
   product: Product
   quantity: number
   price: number
   total: number
+  customPrice?: boolean
+  wasSuggested?: boolean
+  lastSaleDate?: string
+  originalPrice?: number
 }
 
 export function POSSystem() {
@@ -35,6 +36,12 @@ export function POSSystem() {
   const [loading, setLoading] = useState(true)
   const [processing, setProcessing] = useState(false)
   const [showCheckout, setShowCheckout] = useState(false)
+  const [editingPrice, setEditingPrice] = useState<number | null>(null)
+  const [customPriceValue, setCustomPriceValue] = useState("")
+  const [showPaymentDialog, setShowPaymentDialog] = useState(false)
+  const [amountPaid, setAmountPaid] = useState("")
+  const [editingOrderPrice, setEditingOrderPrice] = useState<number | null>(null)
+  const [orderCustomPriceValue, setOrderCustomPriceValue] = useState("")
 
   // Load initial data
   useEffect(() => {
@@ -67,8 +74,8 @@ export function POSSystem() {
       setFilteredProducts(products)
     } else {
       const filtered = products.filter(product =>
-        product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        product.supplier_name.toLowerCase().includes(searchQuery.toLowerCase())
+        product.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        product.supplier_name?.toLowerCase().includes(searchQuery.toLowerCase())
       )
       setFilteredProducts(filtered)
     }
@@ -80,16 +87,16 @@ export function POSSystem() {
       setFilteredCustomers(customers)
     } else {
       const filtered = customers.filter(customer =>
-        customer.name.toLowerCase().includes(customerSearchQuery.toLowerCase()) ||
-        customer.contact_person.toLowerCase().includes(customerSearchQuery.toLowerCase()) ||
-        customer.phone.includes(customerSearchQuery)
+        customer.name?.toLowerCase().includes(customerSearchQuery.toLowerCase()) ||
+        customer.contact_person?.toLowerCase().includes(customerSearchQuery.toLowerCase()) ||
+        customer.phone?.includes(customerSearchQuery)
       )
       setFilteredCustomers(filtered)
     }
   }, [customerSearchQuery, customers])
 
-  // Add product to cart
-  const addToCart = (product: Product) => {
+  // Add product to cart with price suggestion
+  const addToCart = async (product: Product) => {
     if (product.quantity <= 0) {
       toast.error('Product is out of stock')
       return
@@ -104,14 +111,43 @@ export function POSSystem() {
       }
       updateCartQuantity(product.id, existingItem.quantity + 1)
     } else {
+      let price = parseFloat(product.sale_price || product.price)
+      let wasSuggested = false
+      let lastSaleDate: string | undefined
+      let originalPrice: number | undefined
+
+      // Check for suggested price if customer is selected
+      if (selectedCustomer) {
+        try {
+          const response = await getLastSalePrice(selectedCustomer.id, product.id)
+          if (response.found && response.last_price) {
+            const suggestedPrice = parseFloat(response.last_price)
+            originalPrice = price
+            price = suggestedPrice
+            wasSuggested = true
+            lastSaleDate = response.last_sale_date || undefined
+            toast.success(`💡 Using suggested price ₨${suggestedPrice.toLocaleString('en-PK')} for ${product.name}`)
+          }
+        } catch (error) {
+          console.error('Error checking last price:', error)
+          // Continue with default price if suggestion fails
+        }
+      }
+
       const newItem: CartItem = {
         product,
         quantity: 1,
-        price: parseFloat(product.price),
-        total: parseFloat(product.price)
+        price,
+        total: price,
+        wasSuggested,
+        lastSaleDate,
+        originalPrice
       }
       setCart([...cart, newItem])
-      toast.success(`${product.name} added to cart`)
+      
+      if (!wasSuggested) {
+        toast.success(`${product.name} added to cart`)
+      }
     }
   }
 
@@ -146,7 +182,124 @@ export function POSSystem() {
     setCart([])
     setSelectedCustomer(null)
     setCustomerSearchQuery("")
+    setEditingPrice(null)
+    setCustomPriceValue("")
+    setEditingOrderPrice(null)
+    setOrderCustomPriceValue("")
+    setAmountPaid("")
     toast.success('Cart cleared')
+  }
+
+  // Update cart item price
+  const updateCartPrice = (productId: number, newPrice: number) => {
+    setCart(prevCart =>
+      prevCart.map(item =>
+        item.product.id === productId
+          ? {
+              ...item,
+              price: newPrice,
+              total: newPrice * item.quantity,
+              customPrice: true
+            }
+          : item
+      )
+    )
+  }
+
+  // Handle custom price editing
+  const startEditingPrice = (productId: number, currentPrice: number) => {
+    setEditingPrice(productId)
+    setCustomPriceValue(currentPrice.toString())
+  }
+
+  const saveCustomPrice = (productId: number) => {
+    const newPrice = parseFloat(customPriceValue)
+    if (!isNaN(newPrice) && newPrice > 0) {
+      updateCartPrice(productId, newPrice)
+      toast.success('Price updated successfully')
+    } else {
+      toast.error('Please enter a valid price')
+    }
+    setEditingPrice(null)
+    setCustomPriceValue("")
+  }
+
+  const cancelEditingPrice = () => {
+    setEditingPrice(null)
+    setCustomPriceValue("")
+  }
+
+  // Handle order summary price editing
+  const startEditingOrderPrice = (productId: number, currentPrice: number) => {
+    setEditingOrderPrice(productId)
+    setOrderCustomPriceValue(currentPrice.toString())
+  }
+
+  const saveOrderCustomPrice = (productId: number) => {
+    const newPrice = parseFloat(orderCustomPriceValue)
+    if (!isNaN(newPrice) && newPrice > 0) {
+      setCart(prevCart =>
+        prevCart.map(item =>
+          item.product.id === productId
+            ? {
+                ...item,
+                price: newPrice,
+                total: newPrice * item.quantity,
+                customPrice: true,
+                wasSuggested: false // Reset suggested flag when manually edited
+              }
+            : item
+        )
+      )
+      toast.success('Price updated in order summary')
+    } else {
+      toast.error('Please enter a valid price')
+    }
+    setEditingOrderPrice(null)
+    setOrderCustomPriceValue("")
+  }
+
+  const cancelEditingOrderPrice = () => {
+    setEditingOrderPrice(null)
+    setOrderCustomPriceValue("")
+  }
+
+  // Update cart with price suggestions when customer is selected
+  const updateCartWithSuggestions = async (customer: Customer) => {
+    if (cart.length === 0) return
+
+    const updatedCart = await Promise.all(
+      cart.map(async (item) => {
+        // Skip if item already has a suggested price or custom price
+        if (item.wasSuggested || item.customPrice) {
+          return item
+        }
+
+        try {
+          const response = await getLastSalePrice(customer.id, item.product.id)
+          if (response.found && response.last_price) {
+            const suggestedPrice = parseFloat(response.last_price)
+            const originalPrice = parseFloat(item.product.sale_price || item.product.price)
+            
+            toast.success(`💡 Updated ${item.product.name} with suggested price ₨${suggestedPrice.toLocaleString('en-PK')}`)
+            
+            return {
+              ...item,
+              price: suggestedPrice,
+              total: suggestedPrice * item.quantity,
+              wasSuggested: true,
+              lastSaleDate: response.last_sale_date || undefined,
+              originalPrice: originalPrice
+            }
+          }
+        } catch (error) {
+          console.error('Error checking last price for', item.product.name, error)
+        }
+        return item
+      })
+    )
+
+    setCart(updatedCart)
   }
 
   // Handle customer selection or creation
@@ -160,6 +313,9 @@ export function POSSystem() {
       setSelectedCustomer(existingCustomer)
       setCustomerSearchQuery(existingCustomer.name)
       setShowCustomerDropdown(false)
+      
+      // Update cart with price suggestions for this customer
+      await updateCartWithSuggestions(existingCustomer)
     } else if (customerName.trim()) {
       // Create new customer
       try {
@@ -182,6 +338,8 @@ export function POSSystem() {
         setShowCustomerDropdown(false)
 
         toast.success(`Customer "${customerName}" created and selected`)
+        
+        // No need to update cart prices for new customer (no previous sales)
       } catch (error) {
         console.error('Error creating customer:', error)
         toast.error('Failed to create customer')
@@ -195,8 +353,8 @@ export function POSSystem() {
   const taxAmount = subtotal * (taxRate / 100)
   const total = subtotal + taxAmount
 
-  // Process sale
-  const processSale = async () => {
+  // Handle checkout button click
+  const handleCheckoutClick = () => {
     if (cart.length === 0) {
       toast.error('Cart is empty')
       return
@@ -207,11 +365,23 @@ export function POSSystem() {
       return
     }
 
+    // Set default amount paid to total amount (as string)
+    setAmountPaid(total.toString())
+    setShowCheckout(false)
+    setShowPaymentDialog(true)
+  }
+
+  // Process sale with payment details
+  const processSale = async () => {
     try {
       setProcessing(true)
 
+      const paidAmount = parseFloat(amountPaid) || 0
+      const isLoan = paidAmount < total
+      const remainingBalance = total - paidAmount
+
       const invoiceData = {
-        customer: selectedCustomer.id,
+        customer: selectedCustomer!.id,
         date: new Date().toISOString().split('T')[0], // YYYY-MM-DD format
         items: cart.map(item => ({
           product: item.product.id,
@@ -219,16 +389,24 @@ export function POSSystem() {
           price: item.price.toFixed(2) // Ensure 2 decimal places
         })),
         tax_rate: 0.0, // Explicitly set as number
-        notes: `POS Sale - ${cart.length} items`
+        notes: `POS Sale - ${cart.length} items. ${isLoan ? `Loan: ₨${remainingBalance.toFixed(2)} remaining` : 'Fully paid'}`,
+        is_loan: isLoan,
+        amount_paid: paidAmount
       }
 
       console.log('Sending invoice data:', invoiceData)
       const invoice = await createSalesInvoice(invoiceData)
 
-      toast.success(`Sale completed! Invoice: ${invoice.invoice_id}`)
+      let message = `Sale completed!\nInvoice: ${invoice.invoice_id}\nTotal: ₨${Math.round(total).toLocaleString('en-PK')}\nPaid: ₨${paidAmount.toLocaleString('en-PK')}`
+      if (isLoan) {
+        message += `\nRemaining: ₨${Math.round(remainingBalance).toLocaleString('en-PK')}`
+      }
 
-      // Clear cart and close checkout
+      toast.success(message)
+
+      // Clear cart and close dialogs
       clearCart()
+      setShowPaymentDialog(false)
       setShowCheckout(false)
 
       // Refresh products to update stock
@@ -245,8 +423,32 @@ export function POSSystem() {
 
       // Try to get more specific error message
       let errorMessage = 'Failed to process sale'
-      if (error?.response?.data) {
-        errorMessage = JSON.stringify(error.response.data)
+
+      if (error?.message?.includes('HTTP error')) {
+        // Parse the error message to get the actual server response
+        const match = error.message.match(/message: (.+)$/)
+        if (match) {
+          try {
+            const serverError = JSON.parse(match[1])
+            if (typeof serverError === 'object') {
+              if (serverError.detail) {
+                errorMessage = serverError.detail
+              } else if (serverError.error) {
+                errorMessage = serverError.error
+              } else if (serverError.non_field_errors) {
+                errorMessage = Array.isArray(serverError.non_field_errors)
+                  ? serverError.non_field_errors.join(', ')
+                  : serverError.non_field_errors
+              } else {
+                errorMessage = JSON.stringify(serverError)
+              }
+            } else if (typeof serverError === 'string') {
+              errorMessage = serverError
+            }
+          } catch {
+            errorMessage = match[1]
+          }
+        }
       } else if (error?.message) {
         errorMessage = error.message
       }
@@ -274,20 +476,20 @@ export function POSSystem() {
       <div className="lg:col-span-2 space-y-4">
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <ShoppingCart className="h-5 w-5" />
+            <CardTitle className="flex items-center gap-2 text-xl">
+              <ShoppingCart className="h-6 w-6" />
               Products
             </CardTitle>
-            <CardDescription>Select products to add to cart</CardDescription>
+            <CardDescription className="text-base">Select products to add to cart</CardDescription>
           </CardHeader>
           <CardContent>
             <div className="flex items-center space-x-2 mb-4">
-              <Search className="h-4 w-4 text-muted-foreground" />
+              <Search className="h-5 w-5 text-muted-foreground" />
               <Input
                 placeholder="Search products..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="flex-1"
+                className="flex-1 text-base h-11"
               />
             </div>
             
@@ -300,18 +502,18 @@ export function POSSystem() {
                   }`}
                   onClick={() => addToCart(product)}
                 >
-                  <CardContent className="p-3">
-                    <div className="space-y-2">
+                  <CardContent className="p-5">
+                    <div className="space-y-4">
                       <div className="flex justify-between items-start">
-                        <h4 className="font-medium text-sm leading-tight">{product.name}</h4>
-                        <Badge variant={product.status === 'in_stock' ? 'default' : 'destructive'} className="text-xs">
+                        <h4 className="font-semibold text-lg leading-tight">{product.name}</h4>
+                        <Badge variant={product.status === 'in_stock' ? 'default' : 'destructive'} className="text-base px-3 py-1">
                           {product.status_display}
                         </Badge>
                       </div>
-                      <p className="text-xs text-muted-foreground">{product.supplier_name}</p>
+                      <p className="text-base text-muted-foreground font-medium">{product.supplier_name}</p>
                       <div className="flex justify-between items-center">
-                        <span className="font-bold text-sm">₨{Math.round(parseFloat(product.price)).toLocaleString('en-PK')}</span>
-                        <span className="text-xs text-muted-foreground">Stock: {product.quantity}</span>
+                        <span className="font-bold text-xl">₨{Math.round(parseFloat(product.sale_price || product.price)).toLocaleString('en-PK')}</span>
+                        <span className="text-base text-muted-foreground font-medium">Stock: {product.quantity}</span>
                       </div>
                     </div>
                   </CardContent>
@@ -326,9 +528,9 @@ export function POSSystem() {
       <div className="space-y-4">
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center justify-between">
+            <CardTitle className="flex items-center justify-between text-xl">
               <span className="flex items-center gap-2">
-                <Receipt className="h-5 w-5" />
+                <Receipt className="h-6 w-6" />
                 Cart ({cart.length})
               </span>
               {cart.length > 0 && (
@@ -340,32 +542,106 @@ export function POSSystem() {
           </CardHeader>
           <CardContent className="space-y-4">
             {cart.length === 0 ? (
-              <p className="text-center text-muted-foreground py-8">Cart is empty</p>
+              <p className="text-center text-muted-foreground py-8 text-lg">Cart is empty</p>
             ) : (
               <>
-                <div className="space-y-2 max-h-64 overflow-y-auto">
+                <div className="space-y-3 max-h-64 overflow-y-auto">
                   {cart.map((item) => (
-                    <div key={item.product.id} className="flex items-center justify-between p-2 border rounded">
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium text-sm truncate">{item.product.name}</p>
-                        <p className="text-xs text-muted-foreground">₨{item.price.toLocaleString('en-PK')} each</p>
+                    <div key={item.product.id} className="p-4 border rounded-lg">
+                      <div className="flex items-center justify-between mb-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <p className="font-semibold text-lg truncate">{item.product.name}</p>
+                            {item.wasSuggested && (
+                              <span className="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium bg-green-100 text-green-800">
+                                💡 Suggested
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 mt-1">
+                            {editingPrice === item.product.id ? (
+                              <div className="flex items-center gap-2">
+                                <Input
+                                  type="number"
+                                  value={customPriceValue}
+                                  onChange={(e) => setCustomPriceValue(e.target.value)}
+                                  className="w-24 h-10 text-base"
+                                  placeholder="Price"
+                                  step="0.01"
+                                  min="0"
+                                />
+                                <Button
+                                  size="sm"
+                                  onClick={() => saveCustomPrice(item.product.id)}
+                                  className="h-10 px-3 text-base"
+                                >
+                                  ✓
+                                </Button>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={cancelEditingPrice}
+                                  className="h-10 px-3 text-base"
+                                >
+                                  ✕
+                                </Button>
+                              </div>
+                            ) : (
+                              <div className="flex flex-col gap-1">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-base text-muted-foreground font-medium">
+                                    ₨{Math.round(item.price).toLocaleString('en-PK')} each
+                                    {item.customPrice && <span className="text-blue-600 ml-1 font-semibold">(custom)</span>}
+                                    {item.wasSuggested && <span className="text-green-600 ml-1 font-semibold">(suggested)</span>}
+                                  </span>
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => startEditingPrice(item.product.id, item.price)}
+                                    className="h-8 w-8 p-0 text-base"
+                                    title="Edit price"
+                                  >
+                                    ✏️
+                                  </Button>
+                                </div>
+                                {item.wasSuggested && item.originalPrice && item.originalPrice !== item.price && (
+                                  <span className="text-xs text-gray-400 line-through">
+                                    Default: ₨{Math.round(item.originalPrice).toLocaleString('en-PK')}
+                                  </span>
+                                )}
+                                {item.lastSaleDate && (
+                                  <span className="text-xs text-green-600">
+                                    Last sold: {item.lastSaleDate}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => updateCartQuantity(item.product.id, item.quantity - 1)}
-                        >
-                          <Minus className="h-3 w-3" />
-                        </Button>
-                        <span className="w-8 text-center text-sm">{item.quantity}</span>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => updateCartQuantity(item.product.id, item.quantity + 1)}
-                        >
-                          <Plus className="h-3 w-3" />
-                        </Button>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => updateCartQuantity(item.product.id, item.quantity - 1)}
+                            className="h-10 w-10 p-0"
+                          >
+                            <Minus className="h-5 w-5" />
+                          </Button>
+                          <span className="w-16 text-center text-xl font-bold">{item.quantity}</span>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => updateCartQuantity(item.product.id, item.quantity + 1)}
+                            className="h-10 w-10 p-0"
+                          >
+                            <Plus className="h-5 w-5" />
+                          </Button>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-bold text-xl">₨{Math.round(item.total).toLocaleString('en-PK')}</p>
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -373,18 +649,18 @@ export function POSSystem() {
 
                 <Separator />
 
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm">
+                <div className="space-y-4 p-4 bg-muted/50 rounded-lg">
+                  <div className="flex justify-between text-lg font-medium">
                     <span>Subtotal:</span>
                     <span>₨{Math.round(subtotal).toLocaleString('en-PK')}</span>
                   </div>
                   {taxAmount > 0 && (
-                    <div className="flex justify-between text-sm">
+                    <div className="flex justify-between text-lg font-medium">
                       <span>Tax ({taxRate}%):</span>
                       <span>₨{Math.round(taxAmount).toLocaleString('en-PK')}</span>
                     </div>
                   )}
-                  <div className="flex justify-between font-bold">
+                  <div className="flex justify-between font-bold text-2xl border-t pt-3">
                     <span>Total:</span>
                     <span>₨{Math.round(total).toLocaleString('en-PK')}</span>
                   </div>
@@ -392,15 +668,15 @@ export function POSSystem() {
 
                 <Dialog open={showCheckout} onOpenChange={setShowCheckout}>
                   <DialogTrigger asChild>
-                    <Button className="w-full" size="lg">
+                    <Button className="w-full text-xl py-6" size="lg">
                       Checkout
                     </Button>
                   </DialogTrigger>
                   <DialogContent className="sm:max-w-md">
                     <DialogHeader>
-                      <DialogTitle>Complete Sale</DialogTitle>
+                      <DialogTitle>Select Customer</DialogTitle>
                       <DialogDescription>
-                        Select customer and confirm the sale
+                        Choose a customer for this sale
                       </DialogDescription>
                     </DialogHeader>
                     
@@ -470,19 +746,92 @@ export function POSSystem() {
 
                       <div className="bg-muted p-3 rounded">
                         <h4 className="font-medium mb-2">Order Summary</h4>
-                        <div className="space-y-1 text-sm">
+                        <div className="space-y-3 text-sm">
                           {cart.map((item) => (
-                            <div key={item.product.id} className="flex justify-between">
-                              <span>{item.product.name} x{item.quantity}</span>
-                              <span>₨{Math.round(item.total).toLocaleString('en-PK')}</span>
+                            <div key={item.product.id} className="space-y-2 p-3 bg-gray-50 rounded border border-gray-200 shadow-sm">
+                              <div className="flex justify-between items-start">
+                                <div className="flex-1">
+                                  <div className="flex items-center gap-2 mb-1">
+                                    <span className="font-semibold text-gray-900">{item.product.name} x{item.quantity}</span>
+                                    {item.wasSuggested && (
+                                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
+                                        💡
+                                      </span>
+                                    )}
+                                    {item.customPrice && (
+                                      <span className="inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
+                                        ✏️
+                                      </span>
+                                    )}
+                                  </div>
+                                  
+                                  {/* Price editing section */}
+                                  {editingOrderPrice === item.product.id ? (
+                                    <div className="flex items-center gap-2 mt-1">
+                                      <Input
+                                        type="number"
+                                        value={orderCustomPriceValue}
+                                        onChange={(e) => setOrderCustomPriceValue(e.target.value)}
+                                        className="w-24 h-8 text-sm font-medium text-black bg-white border-2 border-blue-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+                                        placeholder="Enter price"
+                                        step="0.01"
+                                        min="0"
+                                        autoFocus
+                                      />
+                                      <Button
+                                        size="sm"
+                                        onClick={() => saveOrderCustomPrice(item.product.id)}
+                                        className="h-8 px-3 text-sm bg-green-600 hover:bg-green-700"
+                                      >
+                                        ✓
+                                      </Button>
+                                      <Button
+                                        variant="outline"
+                                        size="sm"
+                                        onClick={cancelEditingOrderPrice}
+                                        className="h-8 px-3 text-sm border-gray-300 hover:bg-gray-100"
+                                      >
+                                        ✕
+                                      </Button>
+                                    </div>
+                                  ) : (
+                                    <div className="flex items-center gap-2 text-sm">
+                                      <span className="text-black font-semibold">₨{Math.round(item.price).toLocaleString('en-PK')} each</span>
+                                      <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        onClick={() => startEditingOrderPrice(item.product.id, item.price)}
+                                        className="h-7 w-7 p-0 text-sm hover:bg-blue-100 rounded-full"
+                                        title="Edit price"
+                                      >
+                                        ✏️
+                                      </Button>
+                                    </div>
+                                  )}
+                                  
+                                  {item.wasSuggested && item.lastSaleDate && (
+                                    <div className="text-xs text-green-600 mt-1 font-medium">
+                                      Last sold: ₨{Math.round(item.originalPrice || item.price).toLocaleString('en-PK')} on {item.lastSaleDate}
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="text-right">
+                                  <span className="font-bold text-lg text-gray-900">₨{Math.round(item.total).toLocaleString('en-PK')}</span>
+                                </div>
+                              </div>
                             </div>
                           ))}
                           <Separator className="my-2" />
                           <div className="flex justify-between font-bold">
                             <span>Total</span>
-                            <span>₨{Math.round(total).toLocaleString('en-PK')}</span>
+                            <span>���{Math.round(total).toLocaleString('en-PK')}</span>
                           </div>
                         </div>
+                        {cart.some(item => item.wasSuggested) && (
+                          <div className="text-xs text-green-600 mt-2 p-2 bg-green-50 rounded">
+                            💡 This order includes {cart.filter(item => item.wasSuggested).length} item(s) with suggested pricing based on previous sales to this customer.
+                          </div>
+                        )}
                       </div>
                     </div>
 
@@ -491,10 +840,10 @@ export function POSSystem() {
                         Cancel
                       </Button>
                       <Button 
-                        onClick={processSale} 
-                        disabled={processing || !selectedCustomer}
+                        onClick={handleCheckoutClick} 
+                        disabled={!selectedCustomer}
                       >
-                        {processing ? 'Processing...' : 'Complete Sale'}
+                        Continue to Payment
                       </Button>
                     </DialogFooter>
                   </DialogContent>
@@ -504,6 +853,70 @@ export function POSSystem() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Payment Dialog */}
+      <Dialog open={showPaymentDialog} onOpenChange={setShowPaymentDialog}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle>Customer Payment Details</DialogTitle>
+            <DialogDescription>
+              Enter payment details for this sale (Total: ₨{Math.round(total).toLocaleString('en-PK')})
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="amountPaid" className="text-right">Amount Paid (₨)</Label>
+              <Input
+                id="amountPaid"
+                type="number"
+                step="0.01"
+                min="0"
+                max={total}
+                value={amountPaid}
+                onChange={e => setAmountPaid(e.target.value)}
+                className="col-span-3"
+                placeholder="Enter amount paid"
+                required
+              />
+            </div>
+
+            {/* Payment Status Display */}
+            {amountPaid && parseFloat(amountPaid) > 0 && (
+              <div className="p-3 bg-gray-50 rounded-lg">
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span>Total Amount:</span>
+                    <span className="font-medium">₨{Math.round(total).toLocaleString('en-PK')}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Amount Paid:</span>
+                    <span className="font-medium text-blue-600">₨{parseFloat(amountPaid).toLocaleString('en-PK')}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span>Remaining Balance:</span>
+                    <span className={`font-medium ${total - parseFloat(amountPaid) > 0 ? 'text-red-600' : 'text-green-600'}`}>
+                      ₨{Math.round(total - parseFloat(amountPaid)).toLocaleString('en-PK')}
+                    </span>
+                  </div>
+                  <div className="pt-2 border-t">
+                    <span className={`text-sm font-medium ${total - parseFloat(amountPaid) > 0 ? 'text-orange-600' : 'text-green-600'}`}>
+                      {total - parseFloat(amountPaid) > 0 ? '⚠️ This will create a customer loan' : '✅ Fully paid'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowPaymentDialog(false)}>
+              Cancel
+            </Button>
+            <Button onClick={processSale} disabled={processing}>
+              {processing ? "Processing..." : "Complete Sale"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }
