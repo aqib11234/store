@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback, useMemo } from "react"
 import { getProducts, type Product, deleteProduct as deleteProductApi } from "@/lib/api"
 import { EditProductDialog } from "@/components/edit-product-dialog"
 import { DeleteProductDialog } from "@/components/delete-product-dialog"
@@ -11,92 +11,126 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Edit, Search, Trash, X, RefreshCw } from "lucide-react"
+import { Edit, Search, X, RefreshCw, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react"
+import { formatCurrency } from "@/lib/utils"
 
 interface ProductsTableProps {
   onDataChanged?: () => void
 }
 
+interface PaginationInfo {
+  count: number
+  total_pages: number
+  current_page: number
+  page_size: number
+  next: string | null
+  previous: string | null
+  has_next: boolean
+  has_previous: boolean
+}
+
 export function ProductsTable({ onDataChanged }: ProductsTableProps) {
   const [selectedProducts, setSelectedProducts] = useState<number[]>([])
-  const [activeFilter, setActiveFilter] = useState<string | null>("all")
+  const [activeFilter, setActiveFilter] = useState<string>("all")
   const [searchQuery, setSearchQuery] = useState<string>("")
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState<string>("")
   const [products, setProducts] = useState<Product[]>([])
-  const [filteredProducts, setFilteredProducts] = useState<Product[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [editProduct, setEditProduct] = useState<Product | null>(null)
-  const [deleteProduct, setDeleteProduct] = useState<Product | null>(null)
+  // const [deleteProduct, setDeleteProduct] = useState<Product | null>(null)
   const [editDialogOpen, setEditDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState(25)
+  const [paginationInfo, setPaginationInfo] = useState<PaginationInfo | null>(null)
 
-  // Fetch products from API
-  const fetchProducts = async (forceRefresh = false) => {
+  // Debounce search query to avoid too many API calls
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery)
+      setCurrentPage(1) // Reset to first page when searching
+    }, 500)
+
+    return () => clearTimeout(timer)
+  }, [searchQuery])
+
+  // Reset to first page when filter changes
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [activeFilter])
+
+  // Fetch products from API with pagination
+  const fetchProducts = useCallback(async (page: number = 1, forceRefresh = false) => {
     try {
       setLoading(true)
-      // Add cache busting parameter to force fresh data
-      const params = forceRefresh ? new URLSearchParams({ _t: Date.now().toString() }) : undefined
-      const response = await getProducts(params)
-      console.log('Fetched products:', response.results.length, 'products')
-      console.log('Product names:', response.results.map(p => p.name))
-      setProducts(response.results)
       setError(null)
+      
+      const params = new URLSearchParams()
+      params.set('page', page.toString())
+      params.set('page_size', pageSize.toString())
+      
+      // Add search query if present
+      if (debouncedSearchQuery.trim()) {
+        params.set('search', debouncedSearchQuery.trim())
+      }
+      
+      // Add status filter if not "all"
+      if (activeFilter && activeFilter !== "all") {
+        const statusMap: Record<string, string> = {
+          "in-stock": "in_stock",
+          "low-stock": "low_stock", 
+          "out-of-stock": "out_of_stock"
+        }
+        if (statusMap[activeFilter]) {
+          params.set('status', statusMap[activeFilter])
+        }
+      }
+      
+      // Add cache busting parameter for force refresh
+      if (forceRefresh) {
+        params.set('_t', Date.now().toString())
+      }
+
+      console.log(`Fetching products page ${page} with params:`, params.toString())
+      
+      const response = await getProducts(params)
+      
+      console.log(`Fetched ${response.results.length} products (page ${response.current_page} of ${response.total_pages})`)
+      
+      setProducts(response.results)
+      setPaginationInfo({
+        count: response.count,
+        total_pages: response.total_pages,
+        current_page: response.current_page,
+        page_size: response.page_size,
+        next: response.next,
+        previous: response.previous,
+        has_next: response.has_next,
+        has_previous: response.has_previous
+      })
+      setCurrentPage(response.current_page)
+      
     } catch (err) {
       setError('Failed to fetch products')
       console.error('Error fetching products:', err)
     } finally {
       setLoading(false)
     }
-  }
+  }, [pageSize, debouncedSearchQuery, activeFilter])
+
+  // Initial load and when dependencies change
+  useEffect(() => {
+    fetchProducts(currentPage)
+  }, [fetchProducts, currentPage])
 
   // Force refresh products
-  const handleForceRefresh = () => {
+  const handleForceRefresh = useCallback(() => {
     console.log('Force refreshing products...')
-    fetchProducts(true)
-  }
-
-  useEffect(() => {
-    fetchProducts()
-  }, [])
-
-  // Filter products based on search query and status filter
-  useEffect(() => {
-    let filtered = products
-
-    // Debug logs
-    console.log('Search Query:', searchQuery)
-    console.log('Active Filter:', activeFilter)
-    console.log('Products before filtering:', products.length)
-
-    // Apply search filter
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase()
-      filtered = filtered.filter(product =>
-        product.name.toLowerCase().includes(query) ||
-        product.description?.toLowerCase().includes(query) ||
-        product.supplier_name?.toLowerCase().includes(query)
-      )
-    }
-
-    // Apply status filter
-    if (activeFilter && activeFilter !== "all") {
-      filtered = filtered.filter(product => {
-        switch (activeFilter) {
-          case "in-stock":
-            return product.status === "in_stock"
-          case "low-stock":
-            return product.status === "low_stock"
-          case "out-of-stock":
-            return product.status === "out_of_stock"
-          default:
-            return true
-        }
-      })
-    }
-
-    console.log('Filtered products:', filtered.length)
-    setFilteredProducts(filtered)
-  }, [products, searchQuery, activeFilter])
+    fetchProducts(currentPage, true)
+  }, [fetchProducts, currentPage])
 
   // Handle edit product
   const handleEditProduct = (product: Product) => {
@@ -104,31 +138,31 @@ export function ProductsTable({ onDataChanged }: ProductsTableProps) {
     setEditDialogOpen(true)
   }
 
-  // Handle delete product
-  const handleDeleteProduct = (product: Product) => {
-    setDeleteProduct(product)
-    setDeleteDialogOpen(true)
-  }
+  // Handle delete product (currently unused but kept for future use)
+  // const handleDeleteProduct = (product: Product) => {
+  //   setDeleteProduct(product)
+  //   setDeleteDialogOpen(true)
+  // }
 
   // Handle product updated
-  const handleProductUpdated = () => {
+  const handleProductUpdated = useCallback(() => {
     console.log('Product updated, refreshing list...')
-    fetchProducts(true) // Force refresh with cache busting
+    fetchProducts(currentPage, true) // Force refresh with cache busting
     // Small delay to ensure backend has processed the update
     setTimeout(() => {
       onDataChanged?.() // Notify parent component to refresh dashboard stats
     }, 500)
-  }
+  }, [fetchProducts, currentPage, onDataChanged])
 
   // Handle product deleted
-  const handleProductDeleted = () => {
+  const handleProductDeleted = useCallback(() => {
     console.log('Product deleted, refreshing list...')
-    fetchProducts(true) // Force refresh with cache busting
+    fetchProducts(currentPage, true) // Force refresh with cache busting
     // Small delay to ensure backend has processed the deletion
     setTimeout(() => {
       onDataChanged?.() // Notify parent component to refresh dashboard stats
     }, 500)
-  }
+  }, [fetchProducts, currentPage, onDataChanged])
 
   // Bulk delete selected products
   const handleBulkDelete = async () => {
@@ -144,7 +178,7 @@ export function ProductsTable({ onDataChanged }: ProductsTableProps) {
       }
     }
     setSelectedProducts([]);
-    fetchProducts(true); // Force refresh
+    fetchProducts(currentPage, true); // Force refresh
     if (failed.length > 0) {
       alert(`Failed to delete the following product IDs: ${failed.join(', ')}`);
     }
@@ -157,12 +191,65 @@ export function ProductsTable({ onDataChanged }: ProductsTableProps) {
   }
 
   const toggleSelectAll = () => {
-    if (selectedProducts.length === filteredProducts.length && filteredProducts.length > 0) {
+    if (selectedProducts.length === products.length && products.length > 0) {
       setSelectedProducts([])
     } else {
-      setSelectedProducts(filteredProducts.map((product) => product.id))
+      setSelectedProducts(products.map((product) => product.id))
     }
   }
+
+  // Pagination handlers
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page)
+    setSelectedProducts([]) // Clear selections when changing pages
+  }
+
+  const handlePageSizeChange = (newPageSize: string) => {
+    setPageSize(parseInt(newPageSize))
+    setCurrentPage(1) // Reset to first page
+    setSelectedProducts([]) // Clear selections
+  }
+
+  // Generate page numbers for pagination
+  const getPageNumbers = useMemo(() => {
+    if (!paginationInfo) return []
+    
+    const { current_page, total_pages } = paginationInfo
+    const pages: (number | string)[] = []
+    
+    if (total_pages <= 7) {
+      // Show all pages if 7 or fewer
+      for (let i = 1; i <= total_pages; i++) {
+        pages.push(i)
+      }
+    } else {
+      // Show first page
+      pages.push(1)
+      
+      if (current_page > 4) {
+        pages.push('...')
+      }
+      
+      // Show pages around current page
+      const start = Math.max(2, current_page - 1)
+      const end = Math.min(total_pages - 1, current_page + 1)
+      
+      for (let i = start; i <= end; i++) {
+        pages.push(i)
+      }
+      
+      if (current_page < total_pages - 3) {
+        pages.push('...')
+      }
+      
+      // Show last page
+      if (total_pages > 1) {
+        pages.push(total_pages)
+      }
+    }
+    
+    return pages
+  }, [paginationInfo])
 
   if (loading) {
     return (
@@ -200,49 +287,79 @@ export function ProductsTable({ onDataChanged }: ProductsTableProps) {
     <>
     <Card>
       <CardHeader className="p-4">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="relative w-full max-w-sm">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-            <Input
-              type="search"
-              placeholder="Search products..."
-              className="w-full pl-8"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="relative w-full max-w-sm">
+              <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Input
+                type="search"
+                placeholder="Search products..."
+                className="w-full pl-8"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleForceRefresh}
+                disabled={loading}
+              >
+                <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+                Refresh
+              </Button>
+              {activeFilter && activeFilter !== "all" && (
+                <Badge variant="outline" className="flex items-center gap-1">
+                  {activeFilter === "in-stock" ? "In Stock" :
+                   activeFilter === "low-stock" ? "Low Stock" :
+                   activeFilter === "out-of-stock" ? "Out of Stock" : activeFilter}
+                  <Button variant="ghost" size="icon" className="h-4 w-4 p-0" onClick={() => setActiveFilter("all")}>
+                    <X className="h-3 w-3" />
+                    <span className="sr-only">Remove filter</span>
+                  </Button>
+                </Badge>
+              )}
+              <Select value={activeFilter} onValueChange={setActiveFilter}>
+                <SelectTrigger className="w-[180px]">
+                  <SelectValue placeholder="Filter" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All Products</SelectItem>
+                  <SelectItem value="in-stock">In Stock</SelectItem>
+                  <SelectItem value="low-stock">Low Stock</SelectItem>
+                  <SelectItem value="out-of-stock">Out of Stock</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleForceRefresh}
-              disabled={loading}
-            >
-              <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
-            </Button>
-            {activeFilter && activeFilter !== "all" && (
-              <Badge variant="outline" className="flex items-center gap-1">
-                {activeFilter === "in-stock" ? "In Stock" :
-                 activeFilter === "low-stock" ? "Low Stock" :
-                 activeFilter === "out-of-stock" ? "Out of Stock" : activeFilter}
-                <Button variant="ghost" size="icon" className="h-4 w-4 p-0" onClick={() => setActiveFilter("all")}>
-                  <X className="h-3 w-3" />
-                  <span className="sr-only">Remove filter</span>
-                </Button>
-              </Badge>
-            )}
-            <Select value={activeFilter || "all"} onValueChange={setActiveFilter}>
-              <SelectTrigger className="w-[180px]">
-                <SelectValue placeholder="Filter" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Products</SelectItem>
-                <SelectItem value="in-stock">In Stock</SelectItem>
-                <SelectItem value="low-stock">Low Stock</SelectItem>
-                <SelectItem value="out-of-stock">Out of Stock</SelectItem>
-              </SelectContent>
-            </Select>
+          
+          {/* Pagination info and page size selector */}
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-sm text-muted-foreground">
+              {paginationInfo && (
+                <>
+                  Showing {((paginationInfo.current_page - 1) * paginationInfo.page_size) + 1} to{' '}
+                  {Math.min(paginationInfo.current_page * paginationInfo.page_size, paginationInfo.count)} of{' '}
+                  {paginationInfo.count} products
+                </>
+              )}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">Show:</span>
+              <Select value={pageSize.toString()} onValueChange={handlePageSizeChange}>
+                <SelectTrigger className="w-[80px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="10">10</SelectItem>
+                  <SelectItem value="25">25</SelectItem>
+                  <SelectItem value="50">50</SelectItem>
+                  <SelectItem value="100">100</SelectItem>
+                </SelectContent>
+              </Select>
+              <span className="text-sm text-muted-foreground">per page</span>
+            </div>
           </div>
         </div>
       </CardHeader>
@@ -256,16 +373,13 @@ export function ProductsTable({ onDataChanged }: ProductsTableProps) {
           >
             Delete Selected ({selectedProducts.length})
           </Button>
-          <div className="text-sm text-muted-foreground">
-            Showing {filteredProducts.length} of {products.length} products
-          </div>
         </div>
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead className="w-[50px] text-base font-bold">
                 <Checkbox
-                  checked={selectedProducts.length === filteredProducts.length && filteredProducts.length > 0}
+                  checked={selectedProducts.length === products.length && products.length > 0}
                   onCheckedChange={toggleSelectAll}
                   aria-label="Select all products"
                 />
@@ -281,11 +395,11 @@ export function ProductsTable({ onDataChanged }: ProductsTableProps) {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filteredProducts.length === 0 ? (
+            {products.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={9} className="text-center py-8">
                   <div className="text-muted-foreground">
-                    {searchQuery || activeFilter !== "all"
+                    {debouncedSearchQuery || activeFilter !== "all"
                       ? "No products found matching your criteria"
                       : "No products available"
                     }
@@ -299,7 +413,7 @@ export function ProductsTable({ onDataChanged }: ProductsTableProps) {
                 </TableCell>
               </TableRow>
             ) : (
-              filteredProducts.map((product) => (
+              products.map((product) => (
                 <TableRow key={product.id}>
                 <TableCell className="text-sm">
                   <Checkbox
@@ -311,8 +425,8 @@ export function ProductsTable({ onDataChanged }: ProductsTableProps) {
                 <TableCell className="font-semibold text-lg">{product.name}</TableCell>
                 <TableCell className="text-base">{product.unit_display}</TableCell>
                 <TableCell className="text-base">{product.quantity}</TableCell>
-                <TableCell className="text-base font-medium">₨{Math.round(parseFloat(product.price || '0')).toLocaleString('en-PK')}</TableCell>
-                <TableCell className="text-base font-medium">₨{Math.round(parseFloat(product.sale_price || '0')).toLocaleString('en-PK')}</TableCell>
+                <TableCell className="text-base font-medium">{formatCurrency(product.price, 0)}</TableCell>
+                <TableCell className="text-base font-medium">{formatCurrency(product.sale_price, 0)}</TableCell>
                 <TableCell className="text-base">{product.supplier_name}</TableCell>
                 <TableCell className="text-base">
                   <Badge
@@ -344,14 +458,6 @@ export function ProductsTable({ onDataChanged }: ProductsTableProps) {
                       <Edit className="h-4 w-4" />
                       <span className="sr-only">Edit</span>
                     </Button>
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      onClick={() => handleDeleteProduct(product)}
-                    >
-                      <Trash className="h-4 w-4" />
-                      <span className="sr-only">Delete</span>
-                    </Button>
                   </div>
                 </TableCell>
               </TableRow>
@@ -360,6 +466,68 @@ export function ProductsTable({ onDataChanged }: ProductsTableProps) {
           </TableBody>
         </Table>
       </CardContent>
+      
+      {/* Pagination Controls */}
+      {paginationInfo && paginationInfo.total_pages > 1 && (
+        <div className="flex items-center justify-between px-4 py-3 border-t">
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handlePageChange(1)}
+              disabled={!paginationInfo.has_previous}
+            >
+              <ChevronsLeft className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handlePageChange(currentPage - 1)}
+              disabled={!paginationInfo.has_previous}
+            >
+              <ChevronLeft className="h-4 w-4" />
+            </Button>
+          </div>
+          
+          <div className="flex items-center gap-1">
+            {getPageNumbers.map((page, index) => (
+              <div key={index}>
+                {page === '...' ? (
+                  <span className="px-2 py-1 text-sm text-muted-foreground">...</span>
+                ) : (
+                  <Button
+                    variant={currentPage === page ? "default" : "outline"}
+                    size="sm"
+                    onClick={() => handlePageChange(page as number)}
+                    className="min-w-[32px]"
+                  >
+                    {page}
+                  </Button>
+                )}
+              </div>
+            ))}
+          </div>
+          
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handlePageChange(currentPage + 1)}
+              disabled={!paginationInfo.has_next}
+            >
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handlePageChange(paginationInfo.total_pages)}
+              disabled={!paginationInfo.has_next}
+            >
+              <ChevronsRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
     </Card>
 
     {/* Edit Product Dialog */}
@@ -371,12 +539,12 @@ export function ProductsTable({ onDataChanged }: ProductsTableProps) {
     />
 
     {/* Delete Product Dialog */}
-    <DeleteProductDialog
+    {/* <DeleteProductDialog
       product={deleteProduct}
       open={deleteDialogOpen}
       onOpenChange={setDeleteDialogOpen}
       onProductDeleted={handleProductDeleted}
-    />
+    /> */}
     </>
   )
 }

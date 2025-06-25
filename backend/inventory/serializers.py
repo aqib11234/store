@@ -25,7 +25,7 @@ class ProductSerializer(serializers.ModelSerializer):
     supplier_name = serializers.CharField(source='supplier.name', read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     unit_display = serializers.CharField(source='get_unit_display', read_only=True)
-    sale_price = serializers.DecimalField(max_digits=10, decimal_places=2)  # Allow sale_price to be writable
+    sale_price = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)  # Allow sale_price to be writable
     amount_paid = serializers.DecimalField(max_digits=10, decimal_places=2, write_only=True, required=False)  # For loan tracking
 
     class Meta:

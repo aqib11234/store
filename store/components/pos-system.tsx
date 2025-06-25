@@ -1,7 +1,8 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { getProducts, getCustomers, createSalesInvoice, createCustomer, getLastSalePrice, type Product, type Customer } from "@/lib/api"
+import { getProducts, getCustomers, createSalesInvoice, createCustomer, getLastSalePrice, createAccountTransaction, type Product, type Customer } from "@/lib/api"
+import { formatCurrency, formatForInput } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -42,21 +43,61 @@ export function POSSystem() {
   const [amountPaid, setAmountPaid] = useState("")
   const [editingOrderPrice, setEditingOrderPrice] = useState<number | null>(null)
   const [orderCustomPriceValue, setOrderCustomPriceValue] = useState("")
+  
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1)
+  const [totalPages, setTotalPages] = useState(1)
+  const [totalProducts, setTotalProducts] = useState(0)
+  const [loadingProducts, setLoadingProducts] = useState(false)
+  const itemsPerPage = 12
+
+  // Load products with pagination
+  const loadProducts = async (page: number = 1, search: string = "") => {
+    try {
+      setLoadingProducts(true)
+      
+      // Create URLSearchParams for the API call
+      const params = new URLSearchParams()
+      params.set('page', page.toString())
+      params.set('page_size', itemsPerPage.toString())
+      
+      if (search.trim()) {
+        params.set('search', search.trim())
+      }
+      
+      const productsResponse = await getProducts(params)
+      
+      if (page === 1) {
+        setProducts(productsResponse.results)
+      } else {
+        setProducts(prev => [...prev, ...productsResponse.results])
+      }
+      
+      setTotalPages(productsResponse.total_pages)
+      setTotalProducts(productsResponse.count)
+      setCurrentPage(productsResponse.current_page)
+    } catch (error) {
+      console.error('Error loading products:', error)
+      toast.error('Failed to load products')
+    } finally {
+      setLoadingProducts(false)
+    }
+  }
 
   // Load initial data
   useEffect(() => {
     const loadData = async () => {
       try {
         setLoading(true)
-        const [productsResponse, customersResponse] = await Promise.all([
-          getProducts(),
+        const [customersResponse] = await Promise.all([
           getCustomers()
         ])
         
-        setProducts(productsResponse.results)
-        setFilteredProducts(productsResponse.results)
         setCustomers(customersResponse.results)
         setFilteredCustomers(customersResponse.results)
+        
+        // Load first page of products
+        await loadProducts(1)
       } catch (error) {
         console.error('Error loading POS data:', error)
         toast.error('Failed to load POS data')
@@ -68,18 +109,34 @@ export function POSSystem() {
     loadData()
   }, [])
 
-  // Filter products based on search
+  // Handle search with pagination
   useEffect(() => {
-    if (!searchQuery.trim()) {
-      setFilteredProducts(products)
-    } else {
-      const filtered = products.filter(product =>
-        product.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        product.supplier_name?.toLowerCase().includes(searchQuery.toLowerCase())
-      )
-      setFilteredProducts(filtered)
+    const delayedSearch = setTimeout(() => {
+      if (searchQuery.trim()) {
+        // Reset pagination and search
+        setCurrentPage(1)
+        loadProducts(1, searchQuery.trim())
+      } else {
+        // Reset to show all products
+        setCurrentPage(1)
+        loadProducts(1)
+      }
+    }, 500) // Debounce search
+
+    return () => clearTimeout(delayedSearch)
+  }, [searchQuery])
+
+  // Load more products (append to existing list)
+  const loadMoreProducts = async () => {
+    if (currentPage < totalPages && !loadingProducts) {
+      await loadProducts(currentPage + 1, searchQuery)
     }
-  }, [searchQuery, products])
+  }
+
+  // Set filtered products based on current products (for display)
+  useEffect(() => {
+    setFilteredProducts(products)
+  }, [products])
 
   // Filter customers based on search
   useEffect(() => {
@@ -365,8 +422,8 @@ export function POSSystem() {
       return
     }
 
-    // Set default amount paid to total amount (as string)
-    setAmountPaid(total.toString())
+    // Set default amount paid to total amount (properly formatted)
+    setAmountPaid(formatForInput(total, true))
     setShowCheckout(false)
     setShowPaymentDialog(true)
   }
@@ -397,6 +454,24 @@ export function POSSystem() {
       console.log('Sending invoice data:', invoiceData)
       const invoice = await createSalesInvoice(invoiceData)
 
+      // Add the paid amount to account balance
+      if (paidAmount > 0) {
+        try {
+          const customerName = selectedCustomer?.name || 'Walk-in Customer'
+          const itemsDescription = cart.map(item => `${item.product.name} (${item.quantity})`).join(', ')
+          
+          await createAccountTransaction({
+            type: 'add',
+            amount: paidAmount.toString(),
+            description: `Sale: Invoice ${invoice.invoice_id} - ${customerName} - ${itemsDescription}`
+          });
+          console.log(`Added ₨${paidAmount} to account balance from sale`);
+        } catch (error) {
+          console.error('Failed to add sale amount to account balance:', error);
+          // Don't fail the sale if account transaction fails
+        }
+      }
+
       let message = `Sale completed!\nInvoice: ${invoice.invoice_id}\nTotal: ₨${Math.round(total).toLocaleString('en-PK')}\nPaid: ₨${paidAmount.toLocaleString('en-PK')}`
       if (isLoan) {
         message += `\nRemaining: ₨${Math.round(remainingBalance).toLocaleString('en-PK')}`
@@ -410,9 +485,7 @@ export function POSSystem() {
       setShowCheckout(false)
 
       // Refresh products to update stock
-      const productsResponse = await getProducts()
-      setProducts(productsResponse.results)
-      setFilteredProducts(productsResponse.results)
+      await loadProducts(1, searchQuery)
 
       // Reset customer search
       setCustomerSearchQuery("")
@@ -494,39 +567,90 @@ export function POSSystem() {
             </div>
             
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 max-h-96 overflow-y-auto">
-              {filteredProducts.map((product) => (
-                <Card 
-                  key={product.id} 
-                  className={`cursor-pointer transition-all hover:shadow-md ${
-                    product.quantity <= 0 ? 'opacity-50' : ''
-                  }`}
-                  onClick={() => addToCart(product)}
-                >
-                  <CardContent className="p-5">
-                    <div className="space-y-4">
-                      <div className="flex justify-between items-start">
-                        <h4 className="font-semibold text-lg leading-tight">{product.name}</h4>
-                        <Badge variant={product.status === 'in_stock' ? 'default' : 'destructive'} className="text-base px-3 py-1">
-                          {product.status_display}
-                        </Badge>
+              {filteredProducts.length === 0 && !loadingProducts ? (
+                <div className="col-span-full text-center py-8">
+                  <p className="text-muted-foreground text-lg">
+                    {searchQuery ? `No products found for "${searchQuery}"` : 'No products available'}
+                  </p>
+                </div>
+              ) : (
+                filteredProducts.map((product) => (
+                  <Card 
+                    key={product.id} 
+                    className={`cursor-pointer transition-all hover:shadow-md ${
+                      product.quantity <= 0 ? 'opacity-50' : ''
+                    }`}
+                    onClick={() => addToCart(product)}
+                  >
+                    <CardContent className="p-5">
+                      <div className="space-y-4">
+                        <div className="flex justify-between items-start">
+                          <h4 className="font-semibold text-lg leading-tight">{product.name}</h4>
+                          <Badge variant={product.status === 'in_stock' ? 'default' : 'destructive'} className="text-base px-3 py-1">
+                            {product.status_display}
+                          </Badge>
+                        </div>
+                        <p className="text-base text-muted-foreground font-medium">{product.supplier_name}</p>
+                        <div className="flex justify-between items-center">
+                          <span className="font-bold text-xl">₨{Math.round(parseFloat(product.sale_price || product.price)).toLocaleString('en-PK')}</span>
+                          <span className="text-base text-muted-foreground font-medium">Stock: {product.quantity}</span>
+                        </div>
                       </div>
-                      <p className="text-base text-muted-foreground font-medium">{product.supplier_name}</p>
-                      <div className="flex justify-between items-center">
-                        <span className="font-bold text-xl">₨{Math.round(parseFloat(product.sale_price || product.price)).toLocaleString('en-PK')}</span>
-                        <span className="text-base text-muted-foreground font-medium">Stock: {product.quantity}</span>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+                    </CardContent>
+                  </Card>
+                ))
+              )}
+              
+              {/* Loading indicator for initial load */}
+              {loadingProducts && filteredProducts.length === 0 && (
+                <div className="col-span-full text-center py-8">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mx-auto"></div>
+                  <p className="mt-2 text-sm text-muted-foreground">Loading products...</p>
+                </div>
+              )}
+            </div>
+
+            {/* Pagination Controls */}
+            <div className="flex items-center justify-between mt-4 pt-4 border-t">
+              <div className="text-sm text-muted-foreground">
+                Showing {products.length} of {totalProducts} products
+                {searchQuery && ` (filtered by "${searchQuery}")`}
+              </div>
+              
+              <div className="flex items-center gap-2">
+                {currentPage < totalPages && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={loadMoreProducts}
+                    disabled={loadingProducts}
+                    className="text-sm"
+                  >
+                    {loadingProducts ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-900 mr-2"></div>
+                        Loading...
+                      </>
+                    ) : (
+                      `Load More (${totalPages - currentPage} pages left)`
+                    )}
+                  </Button>
+                )}
+                
+                {currentPage >= totalPages && totalProducts > itemsPerPage && (
+                  <span className="text-sm text-muted-foreground">
+                    All products loaded
+                  </span>
+                )}
+              </div>
             </div>
           </CardContent>
         </Card>
       </div>
 
       {/* Cart Section */}
-      <div className="space-y-4">
-        <Card>
+      <div className="space-y-4 flex flex-col h-full">
+        <Card className="flex-1 flex flex-col">
           <CardHeader>
             <CardTitle className="flex items-center justify-between text-xl">
               <span className="flex items-center gap-2">
@@ -540,7 +664,7 @@ export function POSSystem() {
               )}
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-4 flex-1 flex flex-col">
             {cart.length === 0 ? (
               <p className="text-center text-muted-foreground py-8 text-lg">Cart is empty</p>
             ) : (
@@ -569,6 +693,14 @@ export function POSSystem() {
                                   placeholder="Price"
                                   step="0.01"
                                   min="0"
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      saveCustomPrice(item.product.id)
+                                    } else if (e.key === 'Escape') {
+                                      cancelEditingPrice()
+                                    }
+                                  }}
+                                  autoFocus
                                 />
                                 <Button
                                   size="sm"
@@ -629,7 +761,17 @@ export function POSSystem() {
                           >
                             <Minus className="h-5 w-5" />
                           </Button>
-                          <span className="w-16 text-center text-xl font-bold">{item.quantity}</span>
+                          <Input
+                            type="number"
+                            value={item.quantity}
+                            onChange={(e) => {
+                              const newQuantity = parseInt(e.target.value) || 0
+                              updateCartQuantity(item.product.id, newQuantity)
+                            }}
+                            className="w-16 text-center text-xl font-bold h-10"
+                            min="1"
+                            max={item.product.quantity}
+                          />
                           <Button
                             variant="outline"
                             size="sm"
@@ -649,30 +791,32 @@ export function POSSystem() {
 
                 <Separator />
 
-                <div className="space-y-4 p-4 bg-muted/50 rounded-lg">
-                  <div className="flex justify-between text-lg font-medium">
-                    <span>Subtotal:</span>
-                    <span>₨{Math.round(subtotal).toLocaleString('en-PK')}</span>
-                  </div>
-                  {taxAmount > 0 && (
+                {/* Totals and Checkout - Always visible at bottom */}
+                <div className="mt-auto space-y-4">
+                  <div className="space-y-4 p-4 bg-muted/50 rounded-lg">
                     <div className="flex justify-between text-lg font-medium">
-                      <span>Tax ({taxRate}%):</span>
-                      <span>₨{Math.round(taxAmount).toLocaleString('en-PK')}</span>
+                      <span>Subtotal:</span>
+                      <span>₨{Math.round(subtotal).toLocaleString('en-PK')}</span>
                     </div>
-                  )}
-                  <div className="flex justify-between font-bold text-2xl border-t pt-3">
-                    <span>Total:</span>
-                    <span>₨{Math.round(total).toLocaleString('en-PK')}</span>
+                    {taxAmount > 0 && (
+                      <div className="flex justify-between text-lg font-medium">
+                        <span>Tax ({taxRate}%):</span>
+                        <span>₨{Math.round(taxAmount).toLocaleString('en-PK')}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between font-bold text-2xl border-t pt-3">
+                      <span>Total:</span>
+                      <span>₨{Math.round(total).toLocaleString('en-PK')}</span>
+                    </div>
                   </div>
-                </div>
 
-                <Dialog open={showCheckout} onOpenChange={setShowCheckout}>
-                  <DialogTrigger asChild>
-                    <Button className="w-full text-xl py-6" size="lg">
-                      Checkout
-                    </Button>
-                  </DialogTrigger>
-                  <DialogContent className="sm:max-w-md">
+                  <Dialog open={showCheckout} onOpenChange={setShowCheckout}>
+                    <DialogTrigger asChild>
+                      <Button className="w-full text-xl py-6" size="lg">
+                        Checkout
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent className="sm:max-w-md">
                     <DialogHeader>
                       <DialogTitle>Select Customer</DialogTitle>
                       <DialogDescription>
@@ -746,7 +890,7 @@ export function POSSystem() {
 
                       <div className="bg-muted p-3 rounded">
                         <h4 className="font-medium mb-2">Order Summary</h4>
-                        <div className="space-y-3 text-sm">
+                        <div className="space-y-3 text-sm max-h-64 overflow-y-auto">
                           {cart.map((item) => (
                             <div key={item.product.id} className="space-y-2 p-3 bg-gray-50 rounded border border-gray-200 shadow-sm">
                               <div className="flex justify-between items-start">
@@ -846,8 +990,9 @@ export function POSSystem() {
                         Continue to Payment
                       </Button>
                     </DialogFooter>
-                  </DialogContent>
-                </Dialog>
+                    </DialogContent>
+                  </Dialog>
+                </div>
               </>
             )}
           </CardContent>
@@ -860,7 +1005,7 @@ export function POSSystem() {
           <DialogHeader>
             <DialogTitle>Customer Payment Details</DialogTitle>
             <DialogDescription>
-              Enter payment details for this sale (Total: ₨{Math.round(total).toLocaleString('en-PK')})
+              Enter payment details for this sale (Total: {formatCurrency(total, 0)})
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">

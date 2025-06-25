@@ -9,7 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Plus, Trash2 } from "lucide-react"
-import { getSuppliers, getProducts, createPurchaseInvoice, type Supplier, type Product } from "@/lib/api"
+import { getSuppliers, getProducts, createPurchaseInvoice, createAccountTransaction, type Supplier, type Product } from "@/lib/api"
 import { toast } from "sonner"
 
 interface PurchaseItem {
@@ -44,7 +44,7 @@ export function AddPurchaseDialog({ onPurchaseAdded }: AddPurchaseDialogProps) {
     try {
       const [suppliersResponse, productsResponse] = await Promise.all([
         getSuppliers(),
-        getProducts()
+        getProducts(new URLSearchParams({ page_size: '1000' }))
       ])
       setSuppliers(suppliersResponse.results)
       setProducts(productsResponse.results)
@@ -122,7 +122,29 @@ export function AddPurchaseDialog({ onPurchaseAdded }: AddPurchaseDialogProps) {
         amount_paid: isLoan ? amountPaid : total // If not a loan, mark as fully paid
       }
 
-      await createPurchaseInvoice(purchaseData)
+      const invoice = await createPurchaseInvoice(purchaseData)
+      
+      // Create account transaction for the amount paid
+      const paidAmount = isLoan ? amountPaid : total
+      if (paidAmount > 0) {
+        try {
+          const supplierName = suppliers.find(s => s.id === selectedSupplier)?.name || 'Unknown Supplier'
+          const itemsDescription = items.map(item => {
+            const productName = getProductName(item.product)
+            return `${productName} (${item.quantity})`
+          }).join(', ')
+          
+          await createAccountTransaction({
+            type: 'withdraw',
+            amount: paidAmount.toString(),
+            description: `Purchase: Invoice ${invoice.invoice_id} - ${supplierName} - ${itemsDescription}`
+          })
+          console.log(`Deducted ₨${paidAmount} from account balance for purchase invoice ${invoice.invoice_id}`)
+        } catch (error) {
+          console.error('Failed to create account transaction for purchase:', error)
+          // Don't fail the purchase if account transaction fails
+        }
+      }
       
       toast.success(`Purchase invoice created successfully!${isLoan ? ` Remaining balance: ₨${(total - amountPaid).toLocaleString('en-PK')}` : ''}`)
       

@@ -96,7 +96,14 @@ export default function AccountInvoicesPage() {
               <Card key={t.id} className="transition-all hover:shadow-md">
                 <CardHeader className="flex flex-row items-center justify-between pb-3">
                   <CardTitle className="text-lg font-medium">
-                    {t.type === "add" ? "💰 Deposit" : "💸 Withdrawal"}
+                    {(() => {
+                      if (t.description.includes('Sale:')) return "🛒 Sale Income"
+                      if (t.description.includes('Purchase:')) return "📦 Purchase Payment"
+                      if (t.description.includes('Sales Adjustment:')) return "📈 Sales Adjustment"
+                      if (t.description.includes('Purchase Adjustment:')) return "📉 Purchase Adjustment"
+                      if (t.description.includes('Balance Adjustment:')) return "⚖️ Balance Adjustment"
+                      return t.type === "add" ? "💰 Deposit" : "💸 Withdrawal"
+                    })()}
                   </CardTitle>
                   <span className={`text-xl font-bold ${t.type === "add" ? "text-green-600" : "text-red-600"}`}>
                     {t.type === "add" ? "+" : "-"}₨{parseFloat(t.amount).toLocaleString("en-PK")}
@@ -126,22 +133,31 @@ export default function AccountInvoicesPage() {
           {/* Summary at the bottom */}
           <Card className="bg-blue-50 border-blue-200">
             <CardContent className="p-4">
-              <div className="grid grid-cols-3 gap-4 text-center">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
                 <div>
-                  <p className="text-sm text-muted-foreground">Total Deposits</p>
+                  <p className="text-sm text-muted-foreground">Sales Income</p>
                   <p className="text-lg font-bold text-green-600">
                     ₨{transactions
-                      .filter(t => t.type === 'add')
+                      .filter(t => t.type === 'add' && t.description.includes('Sale:'))
                       .reduce((sum, t) => sum + parseFloat(t.amount), 0)
                       .toLocaleString("en-PK")}
                   </p>
                 </div>
                 <div>
-                  <p className="text-sm text-muted-foreground">Total Withdrawals</p>
+                  <p className="text-sm text-muted-foreground">Purchase Payments</p>
                   <p className="text-lg font-bold text-red-600">
                     ₨{transactions
-                      .filter(t => t.type === 'withdraw')
+                      .filter(t => t.type === 'withdraw' && t.description.includes('Purchase:'))
                       .reduce((sum, t) => sum + parseFloat(t.amount), 0)
+                      .toLocaleString("en-PK")}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Manual & Adjustments</p>
+                  <p className="text-lg font-bold text-gray-600">
+                    ₨{transactions
+                      .filter(t => !t.description.includes('Sale:') && !t.description.includes('Purchase:'))
+                      .reduce((sum, t) => sum + (t.type === 'add' ? parseFloat(t.amount) : -parseFloat(t.amount)), 0)
                       .toLocaleString("en-PK")}
                   </p>
                 </div>

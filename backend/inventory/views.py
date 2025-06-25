@@ -3,7 +3,7 @@ from rest_framework.decorators import api_view, action
 from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
-from django.db.models import Sum, Count
+from django.db.models import Sum, Count, Prefetch
 from django.utils import timezone
 from datetime import date
 
@@ -22,12 +22,18 @@ from .serializers import (
     DashboardStatsSerializer,
     AccountTransactionSerializer
 )
+from .pagination import (
+    CustomPageNumberPagination, 
+    LargeResultsSetPagination, 
+    SmallResultsSetPagination
+)
 from rest_framework import permissions
 
 
 class SupplierViewSet(viewsets.ModelViewSet):
     queryset = Supplier.objects.all()
     serializer_class = SupplierSerializer
+    pagination_class = SmallResultsSetPagination
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     search_fields = ['name', 'contact_person', 'email']
     ordering_fields = ['name', 'created_at']
@@ -37,6 +43,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
 class CustomerViewSet(viewsets.ModelViewSet):
     queryset = Customer.objects.all()
     serializer_class = CustomerSerializer
+    pagination_class = SmallResultsSetPagination
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     search_fields = ['name', 'contact_person', 'email']
     ordering_fields = ['name', 'created_at']
@@ -46,11 +53,18 @@ class CustomerViewSet(viewsets.ModelViewSet):
 class ProductViewSet(viewsets.ModelViewSet):
     queryset = Product.objects.select_related('supplier').all()
     serializer_class = ProductSerializer
+    pagination_class = LargeResultsSetPagination
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
     filterset_fields = ['status', 'unit', 'supplier']
-    search_fields = ['name', 'sku', 'description', 'supplier__name']
-    ordering_fields = ['name', 'price', 'quantity', 'created_at']
-    ordering = ['name']
+    search_fields = ['name', 'description', 'supplier__name']
+    ordering_fields = ['name', 'price', 'quantity', 'created_at', 'updated_at']
+    ordering = ['-updated_at', 'name']  # Show recently updated products first
+
+    def get_queryset(self):
+        """
+        Optimized queryset with select_related for supplier to avoid N+1 queries
+        """
+        return super().get_queryset()
 
     def perform_create(self, serializer):
         """Override to create purchase invoice when adding new products"""
@@ -74,17 +88,8 @@ class ProductViewSet(viewsets.ModelViewSet):
         else:
             supplier_obj = serializer.validated_data['supplier']
 
-        existing_product = Product.objects.filter(name__iexact=normalized_name, supplier=supplier_obj).first()
-        # Only update if the product actually exists in the database
-        if existing_product and Product.objects.filter(pk=existing_product.pk).exists():
-            existing_product.quantity += serializer.validated_data['quantity']
-            existing_product.price = serializer.validated_data['price']
-            existing_product.sale_price = serializer.validated_data['sale_price']
-            existing_product.low_stock_threshold = serializer.validated_data['low_stock_threshold']
-            existing_product.description = serializer.validated_data['description']
-            existing_product.save()
-            print(f"Updated existing product: {existing_product.name} (ID: {existing_product.id})")
-            return
+        # Don't automatically merge products - let the frontend handle this logic
+        # This prevents the double quantity issue
 
         # Set normalized name before saving
         serializer.validated_data['name'] = normalized_name
@@ -152,21 +157,24 @@ class ProductViewSet(viewsets.ModelViewSet):
             print("Warning: Sale price and purchase price are the same during update!")
         serializer.save()
 
-    def get_queryset(self):
-        queryset = super().get_queryset()
-        print(f"Fetched products: {queryset}")
-        return queryset
-
 
 class SalesInvoiceViewSet(viewsets.ModelViewSet):
-    queryset = SalesInvoice.objects.select_related('customer').prefetch_related('salesinvoiceitem_set__product').all()
+    queryset = SalesInvoice.objects.select_related('customer').prefetch_related(
+        Prefetch(
+            'salesinvoiceitem_set',
+            queryset=SalesInvoiceItem.objects.select_related('product')
+        ),
+        'loan_payments'
+    ).all()
     serializer_class = SalesInvoiceSerializer
+    pagination_class = CustomPageNumberPagination
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
-    filterset_fields = ['customer', 'date']
+    filterset_fields = ['customer', 'date', 'payment_status', 'is_loan']
     search_fields = ['invoice_id', 'customer__name']
-    ordering_fields = ['date', 'total', 'created_at']
+    ordering_fields = ['date', 'total', 'created_at', 'updated_at']
     ordering = ['-date', '-created_at']
 
+    
     def get_serializer_class(self):
         if self.action == 'create':
             return CreateSalesInvoiceSerializer
@@ -255,14 +263,22 @@ class SalesInvoiceViewSet(viewsets.ModelViewSet):
 
 
 class PurchaseInvoiceViewSet(viewsets.ModelViewSet):
-    queryset = PurchaseInvoice.objects.select_related('supplier').prefetch_related('purchaseinvoiceitem_set__product').all()
+    queryset = PurchaseInvoice.objects.select_related('supplier').prefetch_related(
+        Prefetch(
+            'purchaseinvoiceitem_set',
+            queryset=PurchaseInvoiceItem.objects.select_related('product')
+        ),
+        'loan_payments'
+    ).all()
     serializer_class = PurchaseInvoiceSerializer
+    pagination_class = CustomPageNumberPagination
     filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
-    filterset_fields = ['supplier', 'date']
+    filterset_fields = ['supplier', 'date', 'payment_status', 'is_loan']
     search_fields = ['invoice_id', 'supplier__name']
-    ordering_fields = ['date', 'total', 'created_at']
+    ordering_fields = ['date', 'total', 'created_at', 'updated_at']
     ordering = ['-date', '-created_at']
 
+    
     def get_serializer_class(self):
         if self.action == 'create':
             return CreatePurchaseInvoiceSerializer

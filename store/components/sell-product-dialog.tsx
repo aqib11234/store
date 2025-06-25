@@ -16,6 +16,7 @@ import {
 import { Label } from "@/components/ui/label"
 import { ShoppingCart, Plus, Minus, Info } from "lucide-react"
 import { getProducts, getCustomers, createSalesInvoice, getLastSalePrice, type Product, type Customer } from "@/lib/api"
+import { formatCurrency, formatForInput } from "@/lib/utils"
 
 interface SellProductDialogProps {
   onSaleCompleted?: () => void
@@ -89,7 +90,7 @@ export function SellProductDialog({ onSaleCompleted }: SellProductDialogProps) {
   const fetchData = async () => {
     try {
       const [productsResponse, customersResponse] = await Promise.all([
-        getProducts(),
+        getProducts(new URLSearchParams({ page_size: '1000' })),
         getCustomers()
       ])
       setProducts(productsResponse.results.filter(p => p.quantity > 0))
@@ -140,7 +141,7 @@ export function SellProductDialog({ onSaleCompleted }: SellProductDialogProps) {
     // Determine which price to use
     let productPrice: number
     let wasSuggested = false
-    let originalPrice = parseFloat(product.sale_price || product.price)
+    const originalPrice = parseFloat(product.sale_price || product.price)
     
     if (useCustomPrice && customPrice) {
       productPrice = parseFloat(customPrice)
@@ -228,8 +229,8 @@ export function SellProductDialog({ onSaleCompleted }: SellProductDialogProps) {
       alert('Please select a customer and add at least one item')
       return
     }
-    // Set default amount paid to total amount (as string)
-    setAmountPaid(calculateTotal().toString())
+    // Set default amount paid to total amount (properly formatted)
+    setAmountPaid(formatForInput(calculateTotal(), true))
     setShowPaymentDialog(true)
   }
 
@@ -385,7 +386,7 @@ export function SellProductDialog({ onSaleCompleted }: SellProductDialogProps) {
                             />
                             <label htmlFor="suggested-price" className="flex-1 text-sm cursor-pointer">
                               <span className="font-medium text-green-700">
-                                💡 Suggested: ₨{suggestedPrice.toLocaleString('en-PK')}
+                              💡 Suggested: {formatCurrency(suggestedPrice, 0)}
                               </span>
                               <span className="text-green-600 ml-2 block text-xs">
                                 Last sold on {lastSaleDate}
@@ -406,7 +407,7 @@ export function SellProductDialog({ onSaleCompleted }: SellProductDialogProps) {
                           />
                           <label htmlFor="default-price" className="flex-1 text-sm cursor-pointer">
                             <span className="font-medium text-gray-700">
-                              🏷️ Default: ₨{parseFloat(products.find(p => p.id.toString() === selectedProduct)?.sale_price || products.find(p => p.id.toString() === selectedProduct)?.price || '0').toLocaleString('en-PK')}
+                              🏷️ Default: {formatCurrency(products.find(p => p.id.toString() === selectedProduct)?.sale_price || products.find(p => p.id.toString() === selectedProduct)?.price || '0', 0)}
                             </span>
                             <span className="text-gray-500 block text-xs">Regular selling price</span>
                           </label>
@@ -476,10 +477,10 @@ export function SellProductDialog({ onSaleCompleted }: SellProductDialogProps) {
                               )}
                             </div>
                             <div className="flex items-center gap-4 mt-1 text-sm text-gray-600">
-                              <span>₨{Math.round(item.price).toLocaleString('en-PK')} each</span>
+                              <span>{formatCurrency(item.price, 0)} each</span>
                               {item.wasSuggested && item.originalPrice && item.originalPrice !== item.price && (
                                 <span className="text-gray-400 line-through">
-                                  ₨{Math.round(item.originalPrice).toLocaleString('en-PK')} (default)
+                                  {formatCurrency(item.originalPrice, 0)} (default)
                                 </span>
                               )}
                               {item.lastSaleDate && (
@@ -512,7 +513,7 @@ export function SellProductDialog({ onSaleCompleted }: SellProductDialogProps) {
                             </Button>
 
                             <span className="w-24 text-right font-bold text-gray-900">
-                              ₨{Math.round(item.quantity * item.price).toLocaleString('en-PK')}
+                              {formatCurrency(item.quantity * item.price, 0)}
                             </span>
 
                             <Button
@@ -531,7 +532,7 @@ export function SellProductDialog({ onSaleCompleted }: SellProductDialogProps) {
                     <div className="border-t pt-2 mt-3">
                       <div className="flex justify-between items-center font-bold text-lg">
                         <span>Total:</span>
-                        <span>₨{Math.round(calculateTotal()).toLocaleString('en-PK')}</span>
+                        <span>{formatCurrency(calculateTotal(), 0)}</span>
                       </div>
                     </div>
                   </div>
@@ -547,7 +548,7 @@ export function SellProductDialog({ onSaleCompleted }: SellProductDialogProps) {
                 type="submit"
                 disabled={loading || !selectedCustomer || saleItems.length === 0}
               >
-                {loading ? "Processing..." : `Complete Sale (₨${Math.round(calculateTotal()).toLocaleString('en-PK')})`}
+                {loading ? "Processing..." : `Complete Sale (${formatCurrency(calculateTotal(), 0)})`}
               </Button>
             </DialogFooter>
           </form>
@@ -560,7 +561,7 @@ export function SellProductDialog({ onSaleCompleted }: SellProductDialogProps) {
             <DialogHeader>
               <DialogTitle>Customer Payment Details</DialogTitle>
               <DialogDescription>
-                Enter payment details for this sale (Total: ₨{Math.round(calculateTotal()).toLocaleString('en-PK')})
+                Enter payment details for this sale (Total: {formatCurrency(calculateTotal(), 0)})
                 {saleItems.some(item => item.wasSuggested) && (
                   <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded text-sm">
                     💡 This sale includes {saleItems.filter(item => item.wasSuggested).length} item(s) with suggested pricing based on previous sales to this customer.
@@ -592,16 +593,16 @@ export function SellProductDialog({ onSaleCompleted }: SellProductDialogProps) {
                     <div className="space-y-2 text-sm">
                       <div className="flex justify-between">
                         <span>Total Amount:</span>
-                        <span className="font-medium">₨{Math.round(calculateTotal()).toLocaleString('en-PK')}</span>
+                        <span className="font-medium">{formatCurrency(calculateTotal(), 0)}</span>
                       </div>
                       <div className="flex justify-between">
                         <span>Amount Paid:</span>
-                        <span className="font-medium text-blue-600">₨{parseFloat(amountPaid).toLocaleString('en-PK')}</span>
+                        <span className="font-medium text-blue-600">{formatCurrency(parseFloat(amountPaid), 0)}</span>
                       </div>
                       <div className="flex justify-between">
                         <span>Remaining Balance:</span>
                         <span className={`font-medium ${calculateTotal() - parseFloat(amountPaid) > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                          ₨{Math.round(calculateTotal() - parseFloat(amountPaid)).toLocaleString('en-PK')}
+                          {formatCurrency(calculateTotal() - parseFloat(amountPaid), 0)}
                         </span>
                       </div>
                       <div className="pt-2 border-t">

@@ -1,12 +1,14 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback, useMemo } from "react"
 import { getSalesInvoices, getPurchaseInvoices, deleteSalesInvoice, deletePurchaseInvoice, type SalesInvoice, type PurchaseInvoice } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card"
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Download, Printer, Trash2 } from "lucide-react"
+import { Input } from "@/components/ui/input"
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import { Download, Printer, Trash2, Search, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, RefreshCw } from "lucide-react"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,6 +22,17 @@ import {
 } from "@/components/ui/alert-dialog"
 import { AddLoanPaymentDialog } from "./add-loan-payment-dialog"
 
+interface PaginationInfo {
+  count: number
+  total_pages: number
+  current_page: number
+  page_size: number
+  next: string | null
+  previous: string | null
+  has_next: boolean
+  has_previous: boolean
+}
+
 export function InvoiceViewer() {
   const [activeTab, setActiveTab] = useState("sales")
   const [salesInvoices, setSalesInvoices] = useState<SalesInvoice[]>([])
@@ -27,46 +40,126 @@ export function InvoiceViewer() {
   const [selectedInvoice, setSelectedInvoice] = useState<SalesInvoice | PurchaseInvoice | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  
+  // Pagination state
+  const [currentPage, setCurrentPage] = useState(1)
+  const [pageSize, setPageSize] = useState(25)
+  const [salesPaginationInfo, setSalesPaginationInfo] = useState<PaginationInfo | null>(null)
+  const [purchasePaginationInfo, setPurchasePaginationInfo] = useState<PaginationInfo | null>(null)
+  
+  // Search and filter state
+  const [searchQuery, setSearchQuery] = useState("")
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState("")
+  const [statusFilter, setStatusFilter] = useState("all")
 
-  // Fetch invoices data
+  // Debounce search query
   useEffect(() => {
-    const fetchInvoices = async () => {
-      try {
-        setLoading(true)
-        const [salesResponse, purchaseResponse] = await Promise.all([
-          getSalesInvoices(),
-          getPurchaseInvoices()
-        ])
+    const timer = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery)
+      setCurrentPage(1) // Reset to first page when searching
+    }, 500)
 
-        console.log('Sales invoices fetched:', salesResponse.results.length)
-        console.log('Purchase invoices fetched:', purchaseResponse.results.length)
+    return () => clearTimeout(timer)
+  }, [searchQuery])
 
-        setSalesInvoices(salesResponse.results)
-        setPurchaseInvoices(purchaseResponse.results)
+  // Reset to first page when filter changes
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [statusFilter, activeTab])
 
-        // Set initial selected invoice
-        if (activeTab === "sales" && salesResponse.results.length > 0) {
-          setSelectedInvoice(salesResponse.results[0])
-        } else if (activeTab === "purchases" && purchaseResponse.results.length > 0) {
-          setSelectedInvoice(purchaseResponse.results[0])
-        }
-
-        setError(null)
-      } catch (err) {
-        setError('Failed to fetch invoices')
-        console.error('Error fetching invoices:', err)
-      } finally {
-        setLoading(false)
+  // Fetch invoices with pagination
+  const fetchInvoices = useCallback(async (page: number = 1, forceRefresh = false) => {
+    try {
+      setLoading(true)
+      setError(null)
+      
+      const params = new URLSearchParams()
+      params.set('page', page.toString())
+      params.set('page_size', pageSize.toString())
+      
+      // Add search query if present
+      if (debouncedSearchQuery.trim()) {
+        params.set('search', debouncedSearchQuery.trim())
       }
-    }
+      
+      // Add status filter if not "all"
+      if (statusFilter && statusFilter !== "all") {
+        params.set('payment_status', statusFilter)
+      }
+      
+      // Add cache busting parameter for force refresh
+      if (forceRefresh) {
+        params.set('_t', Date.now().toString())
+      }
 
-    fetchInvoices()
-  }, [activeTab])
+      console.log(`Fetching ${activeTab} invoices page ${page} with params:`, params.toString())
+      
+      if (activeTab === "sales") {
+        const response = await getSalesInvoices(params)
+        
+        console.log(`Fetched ${response.results.length} sales invoices (page ${response.current_page} of ${response.total_pages})`)
+        
+        setSalesInvoices(response.results)
+        setSalesPaginationInfo({
+          count: response.count,
+          total_pages: response.total_pages,
+          current_page: response.current_page,
+          page_size: response.page_size,
+          next: response.next,
+          previous: response.previous,
+          has_next: response.has_next,
+          has_previous: response.has_previous
+        })
+        
+        // Set initial selected invoice only for first page
+        if (response.results.length > 0 && page === 1) {
+          setSelectedInvoice(response.results[0])
+        }
+      } else {
+        const response = await getPurchaseInvoices(params)
+        
+        console.log(`Fetched ${response.results.length} purchase invoices (page ${response.current_page} of ${response.total_pages})`)
+        
+        setPurchaseInvoices(response.results)
+        setPurchasePaginationInfo({
+          count: response.count,
+          total_pages: response.total_pages,
+          current_page: response.current_page,
+          page_size: response.page_size,
+          next: response.next,
+          previous: response.previous,
+          has_next: response.has_next,
+          has_previous: response.has_previous
+        })
+        
+        // Set initial selected invoice only for first page
+        if (response.results.length > 0 && page === 1) {
+          setSelectedInvoice(response.results[0])
+        }
+      }
+      
+      setCurrentPage(page)
+      
+    } catch (err) {
+      setError('Failed to fetch invoices')
+      console.error('Error fetching invoices:', err)
+    } finally {
+      setLoading(false)
+    }
+  }, [activeTab, pageSize, debouncedSearchQuery, statusFilter])
+
+  // Initial load and when dependencies change
+  useEffect(() => {
+    fetchInvoices(currentPage)
+  }, [fetchInvoices, currentPage])
 
   const handleTabChange = (value: string) => {
     setActiveTab(value)
-    const invoices = value === "sales" ? salesInvoices : purchaseInvoices
-    setSelectedInvoice(invoices.length > 0 ? invoices[0] : null)
+    setCurrentPage(1)
+    setSearchQuery("")
+    setDebouncedSearchQuery("")
+    setStatusFilter("all")
+    setSelectedInvoice(null)
   }
 
   const handleInvoiceSelect = (invoiceId: string) => {
@@ -76,6 +169,66 @@ export function InvoiceViewer() {
       setSelectedInvoice(invoice)
     }
   }
+
+  // Pagination handlers
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page)
+  }
+
+  const handlePageSizeChange = (newPageSize: string) => {
+    setPageSize(parseInt(newPageSize))
+    setCurrentPage(1) // Reset to first page
+  }
+
+  // Force refresh
+  const handleForceRefresh = useCallback(() => {
+    console.log('Force refreshing invoices...')
+    fetchInvoices(currentPage, true)
+  }, [fetchInvoices, currentPage])
+
+  // Get current pagination info
+  const currentPaginationInfo = activeTab === "sales" ? salesPaginationInfo : purchasePaginationInfo
+
+  // Generate page numbers for pagination
+  const getPageNumbers = useMemo(() => {
+    if (!currentPaginationInfo) return []
+    
+    const { current_page, total_pages } = currentPaginationInfo
+    const pages: (number | string)[] = []
+    
+    if (total_pages <= 7) {
+      // Show all pages if 7 or fewer
+      for (let i = 1; i <= total_pages; i++) {
+        pages.push(i)
+      }
+    } else {
+      // Show first page
+      pages.push(1)
+      
+      if (current_page > 4) {
+        pages.push('...')
+      }
+      
+      // Show pages around current page
+      const start = Math.max(2, current_page - 1)
+      const end = Math.min(total_pages - 1, current_page + 1)
+      
+      for (let i = start; i <= end; i++) {
+        pages.push(i)
+      }
+      
+      if (current_page < total_pages - 3) {
+        pages.push('...')
+      }
+      
+      // Show last page
+      if (total_pages > 1) {
+        pages.push(total_pages)
+      }
+    }
+    
+    return pages
+  }, [currentPaginationInfo])
 
   const handlePrint = () => {
     if (!selectedInvoice) return
@@ -114,18 +267,13 @@ export function InvoiceViewer() {
     try {
       if (activeTab === "sales") {
         await deleteSalesInvoice(selectedInvoice.id)
-        setSalesInvoices(prev => prev.filter(invoice => invoice.id !== selectedInvoice.id))
       } else {
         await deletePurchaseInvoice(selectedInvoice.id)
-        setPurchaseInvoices(prev => prev.filter(invoice => invoice.id !== selectedInvoice.id))
       }
 
-      // Clear selected invoice and select the first available one
-      const remainingInvoices = activeTab === "sales"
-        ? salesInvoices.filter(invoice => invoice.id !== selectedInvoice.id)
-        : purchaseInvoices.filter(invoice => invoice.id !== selectedInvoice.id)
-
-      setSelectedInvoice(remainingInvoices.length > 0 ? remainingInvoices[0] : null)
+      // Refresh the current page
+      fetchInvoices(currentPage, true)
+      setSelectedInvoice(null)
 
     } catch (error) {
       console.error('Error deleting invoice:', error)
@@ -350,9 +498,79 @@ export function InvoiceViewer() {
   return (
     <Tabs value={activeTab} onValueChange={handleTabChange} className="w-full">
       <TabsList className="grid w-full grid-cols-2 mb-6">
-        <TabsTrigger value="sales">Sales Invoices ({salesInvoices.length})</TabsTrigger>
-        <TabsTrigger value="purchases">Purchase Invoices ({purchaseInvoices.length})</TabsTrigger>
+        <TabsTrigger value="sales">
+          Sales Invoices {salesPaginationInfo && `(${salesPaginationInfo.count})`}
+        </TabsTrigger>
+        <TabsTrigger value="purchases">
+          Purchase Invoices {purchasePaginationInfo && `(${purchasePaginationInfo.count})`}
+        </TabsTrigger>
       </TabsList>
+
+      {/* Search and Filter Controls */}
+      <div className="flex flex-col gap-4 mb-6">
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="relative w-full max-w-sm">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              type="search"
+              placeholder="Search invoices..."
+              className="w-full pl-8"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleForceRefresh}
+              disabled={loading}
+            >
+              <RefreshCw className={`h-4 w-4 mr-2 ${loading ? 'animate-spin' : ''}`} />
+              Refresh
+            </Button>
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="w-[180px]">
+                <SelectValue placeholder="Filter by status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Status</SelectItem>
+                <SelectItem value="paid">Paid</SelectItem>
+                <SelectItem value="partial">Partially Paid</SelectItem>
+                <SelectItem value="unpaid">Unpaid</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        
+        {/* Pagination info and page size selector */}
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-sm text-muted-foreground">
+            {currentPaginationInfo && (
+              <>
+                Showing {((currentPaginationInfo.current_page - 1) * currentPaginationInfo.page_size) + 1} to{' '}
+                {Math.min(currentPaginationInfo.current_page * currentPaginationInfo.page_size, currentPaginationInfo.count)} of{' '}
+                {currentPaginationInfo.count} invoices
+              </>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-sm text-muted-foreground">Show:</span>
+            <Select value={pageSize.toString()} onValueChange={handlePageSizeChange}>
+              <SelectTrigger className="w-[80px]">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="10">10</SelectItem>
+                <SelectItem value="25">25</SelectItem>
+                <SelectItem value="50">50</SelectItem>
+                <SelectItem value="100">100</SelectItem>
+              </SelectContent>
+            </Select>
+            <span className="text-sm text-muted-foreground">per page</span>
+          </div>
+        </div>
+      </div>
 
       <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
         <div className="md:col-span-1">
@@ -362,52 +580,77 @@ export function InvoiceViewer() {
               <CardDescription className="text-lg">Select an invoice to view details</CardDescription>
             </CardHeader>
             <CardContent className="p-0">
-              <TabsContent value="sales" className="m-0">
-                <div className="space-y-1 p-4 max-h-96 overflow-y-auto">
-                  {salesInvoices.map((invoice) => (
-                    <Button
-                      key={invoice.id}
-                      variant={selectedInvoice?.invoice_id === invoice.invoice_id ? "default" : "ghost"}
-                      className="w-full justify-start h-auto p-3"
-                      onClick={() => handleInvoiceSelect(invoice.invoice_id)}
-                    >
-                      <div className="flex w-full flex-col items-start gap-1">
-                        <span className="text-base font-medium leading-tight text-left">{invoice.invoice_id}</span>
-                        <span className="text-sm text-muted-foreground">
-                          {invoice.date} • {new Date(invoice.time).toLocaleTimeString('en-US', {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            hour12: true
-                          })}
-                        </span>
+              <div className="space-y-1 p-4 max-h-96 overflow-y-auto">
+                {(activeTab === "sales" ? salesInvoices : purchaseInvoices).map((invoice) => (
+                  <Button
+                    key={invoice.id}
+                    variant={selectedInvoice?.invoice_id === invoice.invoice_id ? "default" : "ghost"}
+                    className="w-full justify-start h-auto p-3"
+                    onClick={() => handleInvoiceSelect(invoice.invoice_id)}
+                  >
+                    <div className="flex w-full flex-col items-start gap-1">
+                      <span className="text-base font-medium leading-tight text-left">{invoice.invoice_id}</span>
+                      <span className="text-sm text-muted-foreground">
+                        {invoice.date} • {new Date(invoice.time).toLocaleTimeString('en-US', {
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          hour12: true
+                        })}
+                      </span>
+                    </div>
+                  </Button>
+                ))}
+                {(activeTab === "sales" ? salesInvoices : purchaseInvoices).length === 0 && (
+                  <div className="text-center py-8 text-muted-foreground">
+                    {debouncedSearchQuery || statusFilter !== "all"
+                      ? "No invoices found matching your criteria"
+                      : "No invoices available"
+                    }
+                  </div>
+                )}
+              </div>
+              
+              {/* Pagination Controls for Invoice List */}
+              {currentPaginationInfo && currentPaginationInfo.total_pages > 1 && (
+                <div className="flex items-center justify-between px-4 py-3 border-t">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handlePageChange(currentPage - 1)}
+                    disabled={!currentPaginationInfo.has_previous}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  
+                  <div className="flex items-center gap-1">
+                    {getPageNumbers.map((page, index) => (
+                      <div key={index}>
+                        {page === '...' ? (
+                          <span className="px-2 py-1 text-sm text-muted-foreground">...</span>
+                        ) : (
+                          <Button
+                            variant={currentPage === page ? "default" : "outline"}
+                            size="sm"
+                            onClick={() => handlePageChange(page as number)}
+                            className="min-w-[32px]"
+                          >
+                            {page}
+                          </Button>
+                        )}
                       </div>
-                    </Button>
-                  ))}
+                    ))}
+                  </div>
+                  
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handlePageChange(currentPage + 1)}
+                    disabled={!currentPaginationInfo.has_next}
+                  >
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
                 </div>
-              </TabsContent>
-              <TabsContent value="purchases" className="m-0">
-                <div className="space-y-1 p-4 max-h-96 overflow-y-auto">
-                  {purchaseInvoices.map((invoice) => (
-                    <Button
-                      key={invoice.id}
-                      variant={selectedInvoice?.invoice_id === invoice.invoice_id ? "default" : "ghost"}
-                      className="w-full justify-start h-auto p-3"
-                      onClick={() => handleInvoiceSelect(invoice.invoice_id)}
-                    >
-                      <div className="flex w-full flex-col items-start gap-1">
-                        <span className="text-base font-medium leading-tight text-left">{invoice.invoice_id}</span>
-                        <span className="text-sm text-muted-foreground">
-                          {invoice.date} • {new Date(invoice.time).toLocaleTimeString('en-US', {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                            hour12: true
-                          })}
-                        </span>
-                      </div>
-                    </Button>
-                  ))}
-                </div>
-              </TabsContent>
+              )}
             </CardContent>
           </Card>
         </div>

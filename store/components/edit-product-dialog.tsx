@@ -13,7 +13,9 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Label } from "@/components/ui/label"
-import { updateProduct, getSuppliers, type Product, type Supplier } from "@/lib/api"
+import { Checkbox } from "@/components/ui/checkbox"
+import { updateProduct, getSuppliers, createSupplier, createPurchaseInvoice, createAccountTransaction, getAccountTransactions, type Product, type Supplier } from "@/lib/api"
+import { formatCurrency, formatForInput } from "@/lib/utils"
 
 interface EditProductDialogProps {
   product: Product | null
@@ -25,29 +27,39 @@ interface EditProductDialogProps {
 export function EditProductDialog({ product, open, onOpenChange, onProductUpdated }: EditProductDialogProps) {
   const [loading, setLoading] = useState(false)
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
+  const [accountBalance, setAccountBalance] = useState(0)
+  const [originalQuantity, setOriginalQuantity] = useState(0)
   const [formData, setFormData] = useState({
     name: "",
     unit: "",
     quantity: "",
     price: "",
-    supplier: "",
+    sale_price: "",
+    supplier_name: "",
     description: "",
-    low_stock_threshold: "10"
+    low_stock_threshold: "10",
+    amount_paid: "",
+    deduct_from_balance: false
   })
 
   // Update form data when product changes
   useEffect(() => {
     if (product && open) {
+      setOriginalQuantity(product.quantity)
       setFormData({
         name: product.name || "",
         unit: product.unit || "",
         quantity: product.quantity.toString() || "",
         price: product.price || "",
-        supplier: product.supplier?.toString() || "",
+        sale_price: product.sale_price || "",
+        supplier_name: product.supplier_name || "",
         description: product.description || "",
-        low_stock_threshold: product.low_stock_threshold.toString() || "10"
+        low_stock_threshold: product.low_stock_threshold.toString() || "10",
+        amount_paid: "",
+        deduct_from_balance: false
       })
       fetchSuppliers()
+      fetchAccountBalance()
     }
   }, [product, open])
 
@@ -60,6 +72,19 @@ export function EditProductDialog({ product, open, onOpenChange, onProductUpdate
     }
   }
 
+  const fetchAccountBalance = async () => {
+    try {
+      const transactions = await getAccountTransactions()
+      const balance = transactions.results.reduce((sum, t) => 
+        sum + (t.type === 'add' ? parseFloat(t.amount) : -parseFloat(t.amount)), 0
+      )
+      setAccountBalance(balance)
+    } catch (error) {
+      console.error('Error fetching account balance:', error)
+      setAccountBalance(0)
+    }
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!product) return
@@ -67,17 +92,91 @@ export function EditProductDialog({ product, open, onOpenChange, onProductUpdate
     setLoading(true)
 
     try {
+      // Find or create supplier
+      let supplierId = null;
+      if (formData.supplier_name.trim()) {
+        const existingSupplier = suppliers.find(
+          (s) => s.name.toLowerCase() === formData.supplier_name.toLowerCase()
+        );
+        if (existingSupplier) {
+          supplierId = existingSupplier.id;
+        } else {
+          const newSupplier = await createSupplier({
+            name: formData.supplier_name.trim(),
+            contact_person: "",
+            phone: "",
+            email: "",
+            address: "",
+          });
+          supplierId = newSupplier.id;
+        }
+      }
+
+      const newQuantity = parseInt(formData.quantity)
+      const quantityDifference = newQuantity - originalQuantity
+
+      // Handle account balance deduction if checkbox is checked and quantity increased
+      if (formData.deduct_from_balance && quantityDifference > 0) {
+        const totalCost = parseFloat(formData.price) * quantityDifference
+        
+        if (totalCost > accountBalance) {
+          alert(`Insufficient balance! Total cost: ${formatCurrency(totalCost)}, Available balance: ${formatCurrency(accountBalance)}`)
+          setLoading(false)
+          return
+        }
+        
+        try {
+          const supplierName = formData.supplier_name || 'Direct Purchase'
+          await createAccountTransaction({
+            type: 'withdraw',
+            amount: totalCost.toString(),
+            description: `Purchase: ${formData.name} (+${quantityDifference} ${formData.unit}) - ${supplierName} - Balance Deduction`
+          })
+          console.log(`Deducted ₨${totalCost} from account balance for quantity increase`)
+        } catch (error) {
+          console.error('Failed to deduct from account balance:', error)
+          alert('Failed to deduct amount from account balance')
+          setLoading(false)
+          return
+        }
+      }
+
       const productData = {
         name: formData.name,
         unit: formData.unit,
-        quantity: parseInt(formData.quantity),
+        quantity: newQuantity,
         price: formData.price,
-        supplier: formData.supplier ? parseInt(formData.supplier) : undefined,
+        sale_price: formData.sale_price,
+        supplier: supplierId || undefined,
         description: formData.description,
         low_stock_threshold: parseInt(formData.low_stock_threshold)
       }
 
       await updateProduct(product.id, productData)
+
+      // Create purchase invoice if quantity increased and supplier/amount_paid provided
+      if (quantityDifference > 0 && supplierId && formData.amount_paid && parseFloat(formData.amount_paid) > 0) {
+        try {
+          const totalCost = parseFloat(formData.price) * quantityDifference
+          const amountPaid = parseFloat(formData.amount_paid)
+          
+          await createPurchaseInvoice({
+            supplier: supplierId,
+            date: new Date().toISOString().split('T')[0],
+            items: [{
+              product: product.id,
+              quantity: quantityDifference,
+              price: parseFloat(formData.price).toFixed(2)
+            }],
+            is_loan: amountPaid < totalCost,
+            amount_paid: amountPaid
+          })
+          console.log(`Created purchase invoice for quantity increase of ${quantityDifference}`)
+        } catch (invoiceError) {
+          console.error('Failed to create purchase invoice:', invoiceError)
+          // Don't throw here as the product was updated successfully
+        }
+      }
       
       onOpenChange(false)
       onProductUpdated?.()
@@ -172,7 +271,7 @@ export function EditProductDialog({ product, open, onOpenChange, onProductUpdate
 
             <div className="grid grid-cols-4 items-center gap-4">
               <Label htmlFor="edit-price" className="text-right">
-                Price (₨) *
+                Purchase Price (₨) *
               </Label>
               <Input
                 id="edit-price"
@@ -193,22 +292,45 @@ export function EditProductDialog({ product, open, onOpenChange, onProductUpdate
             </div>
 
             <div className="grid grid-cols-4 items-center gap-4">
+              <Label htmlFor="edit-sale-price" className="text-right">
+                Sale Price (₨) *
+              </Label>
+              <Input
+                id="edit-sale-price"
+                type="number"
+                step="0.01"
+                value={formData.sale_price}
+                onChange={(e) => {
+                  const value = e.target.value
+                  if (value === '' || /^\d*\.?\d*$/.test(value)) {
+                    handleInputChange("sale_price", value)
+                  }
+                }}
+                className="col-span-3"
+                min="0.01"
+                placeholder="0.00"
+                required
+              />
+            </div>
+
+            <div className="grid grid-cols-4 items-center gap-4">
               <Label htmlFor="edit-supplier" className="text-right">
                 Supplier
               </Label>
-              <Select value={formData.supplier} onValueChange={(value) => handleInputChange("supplier", value)}>
-                <SelectTrigger className="col-span-3">
-                  <SelectValue placeholder="Select supplier" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="">No Supplier</SelectItem>
+              <div className="col-span-3 relative">
+                <Input
+                  id="edit-supplier"
+                  value={formData.supplier_name}
+                  onChange={(e) => handleInputChange("supplier_name", e.target.value)}
+                  placeholder="Enter supplier name or select from list"
+                  list="edit-suppliers-list"
+                />
+                <datalist id="edit-suppliers-list">
                   {suppliers.map((supplier) => (
-                    <SelectItem key={supplier.id} value={supplier.id.toString()}>
-                      {supplier.name}
-                    </SelectItem>
+                    <option key={supplier.id} value={supplier.name} />
                   ))}
-                </SelectContent>
-              </Select>
+                </datalist>
+              </div>
             </div>
 
             <div className="grid grid-cols-4 items-center gap-4">
@@ -242,6 +364,118 @@ export function EditProductDialog({ product, open, onOpenChange, onProductUpdate
                 placeholder="Optional description"
               />
             </div>
+
+            {/* Show purchase invoice options only if quantity is being increased */}
+            {parseInt(formData.quantity || "0") > originalQuantity && formData.supplier_name && (
+              <>
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label htmlFor="edit-amount-paid" className="text-right">
+                    Amount Paid (₨)
+                  </Label>
+                  <Input
+                    id="edit-amount-paid"
+                    type="number"
+                    step="0.01"
+                    value={formData.amount_paid}
+                    onChange={(e) => handleInputChange("amount_paid", e.target.value)}
+                    className="col-span-3"
+                    min="0"
+                    placeholder={(() => {
+                      const quantityDiff = parseInt(formData.quantity || "0") - originalQuantity
+                      return formData.price && quantityDiff > 0 ? 
+                        formatForInput(parseFloat(formData.price) * quantityDiff, true) : 
+                        "0"
+                    })()}
+                  />
+                </div>
+
+                {formData.amount_paid && formData.price && (
+                  <div className="grid grid-cols-4 items-center gap-4">
+                    <div className="text-right text-sm text-gray-600">
+                      Payment Status:
+                    </div>
+                    <div className="col-span-3 text-sm">
+                      {(() => {
+                        const quantityDiff = parseInt(formData.quantity || "0") - originalQuantity
+                        const totalCost = parseFloat(formData.price) * quantityDiff
+                        const amountPaid = parseFloat(formData.amount_paid)
+                        const remaining = totalCost - amountPaid
+                        
+                        if (remaining > 0) {
+                          return (
+                            <span className="text-orange-600 font-medium">
+                              ⚠️ Loan: {formatCurrency(remaining)} remaining to pay
+                            </span>
+                          )
+                        } else if (remaining === 0) {
+                          return (
+                            <span className="text-green-600 font-medium">
+                              ✅ Fully paid
+                            </span>
+                          )
+                        } else {
+                          return (
+                            <span className="text-red-600 font-medium">
+                              ❌ Amount paid exceeds total cost
+                            </span>
+                          )
+                        }
+                      })()}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* Account Balance Deduction Option */}
+            {parseInt(formData.quantity || "0") > originalQuantity && (
+              <>
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label className="text-right text-sm">
+                    Deduct from Balance
+                  </Label>
+                  <div className="col-span-3 flex items-center space-x-2">
+                    <Checkbox
+                      id="edit-deduct-balance"
+                      checked={formData.deduct_from_balance}
+                      onCheckedChange={(checked) => 
+                        setFormData(prev => ({ ...prev, deduct_from_balance: checked as boolean }))
+                      }
+                    />
+                    <Label htmlFor="edit-deduct-balance" className="text-sm">
+                      Deduct purchase amount from account balance
+                    </Label>
+                  </div>
+                </div>
+
+                {formData.deduct_from_balance && (
+                  <div className="grid grid-cols-4 items-center gap-4">
+                    <div className="text-right text-sm text-gray-600">
+                      Balance Info:
+                    </div>
+                    <div className="col-span-3 text-sm">
+                      {(() => {
+                        const quantityDiff = parseInt(formData.quantity || "0") - originalQuantity
+                        const totalCost = formData.price && quantityDiff > 0 ? 
+                          parseFloat(formData.price) * quantityDiff : 0
+                        const remainingBalance = accountBalance - totalCost
+                        
+                        return (
+                          <div className="space-y-1">
+                            <div>Current Balance: <span className="font-medium">{formatCurrency(accountBalance)}</span></div>
+                            <div>Additional Cost: <span className="font-medium">{formatCurrency(totalCost)}</span></div>
+                            <div className={`font-medium ${remainingBalance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                              Remaining: {formatCurrency(remainingBalance)}
+                              {remainingBalance < 0 && ' (Insufficient balance!)'}
+                            </div>
+                          </div>
+                        )
+                      })()}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>

@@ -2,10 +2,12 @@
 
 import { useState, useEffect } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
 import { Package, AlertTriangle, DollarSign, ShoppingBag, ShoppingCart, TrendingUp } from "lucide-react"
-import { getDashboardStats, type DashboardStats, getAccountTransactions, createAccountTransaction, AccountTransaction } from "@/lib/api"
+import { getDashboardStats, updateDashboardStats, type DashboardStats, getAccountTransactions, createAccountTransaction, AccountTransaction } from "@/lib/api"
 import { Switch } from "@/components/ui/switch"
 import { AccountMoneyDialog } from "@/components/account-money-dialog"
+import { EditableStatCard } from "@/components/editable-stat-card"
 
 export function DashboardStats() {
   const [stats, setStats] = useState<DashboardStats | null>(null)
@@ -92,6 +94,87 @@ export function DashboardStats() {
     sum + (t.type === 'add' ? parseFloat(t.amount) : -parseFloat(t.amount)), 0
   )
 
+  // Handle stat updates by creating adjustment transactions
+  const handleStatUpdate = async (field: string, newValue: number) => {
+    try {
+      if (!stats) return
+      
+      const currentValue = parseFloat(stats[field as keyof DashboardStats] as string)
+      const difference = newValue - currentValue
+      
+      if (difference === 0) {
+        return // No change needed
+      }
+      
+      // Create descriptive transaction based on field type
+      let description = ''
+      let transactionType: 'add' | 'withdraw' = 'add'
+      
+      if (field.includes('sales')) {
+        // For sales adjustments, positive difference means more sales income
+        transactionType = difference > 0 ? 'add' : 'withdraw'
+        description = `Sales Adjustment: ${difference > 0 ? 'Added' : 'Removed'} ₨${Math.abs(difference).toLocaleString('en-PK')} (${field.replace('_', ' ').toUpperCase()})`
+      } else if (field.includes('purchase')) {
+        // For purchase adjustments, positive difference means more expenses
+        transactionType = difference > 0 ? 'withdraw' : 'add'
+        description = `Purchase Adjustment: ${difference > 0 ? 'Added' : 'Removed'} ₨${Math.abs(difference).toLocaleString('en-PK')} (${field.replace('_', ' ').toUpperCase()})`
+      } else {
+        // Generic adjustment
+        transactionType = difference > 0 ? 'add' : 'withdraw'
+        description = `${field.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())} Adjustment: ${difference > 0 ? 'Added' : 'Removed'} ₨${Math.abs(difference).toLocaleString('en-PK')}`
+      }
+      
+      await createAccountTransaction({
+        type: transactionType,
+        amount: Math.abs(difference).toString(),
+        description: description
+      })
+      
+      // Update the local stats to reflect the change
+      setStats(prev => prev ? { ...prev, [field]: newValue.toString() } : null)
+      
+      // Refresh transactions to update the balance
+      const res = await getAccountTransactions()
+      setTransactions(res.results)
+      
+      console.log(`Created ${transactionType} transaction for ${field} adjustment: ₨${Math.abs(difference)}`)
+      
+    } catch (error) {
+      console.error('Failed to create adjustment transaction:', error)
+      alert('Failed to update stats. Please try again.')
+    }
+  }
+
+  // Handle balance update by creating adjustment transaction
+  const handleBalanceUpdate = async (newValue: number) => {
+    try {
+      const currentBalance = netBalance
+      const difference = newValue - currentBalance
+      
+      if (difference === 0) {
+        return // No change needed
+      }
+      
+      const transactionType = difference > 0 ? 'add' : 'withdraw'
+      const amount = Math.abs(difference)
+      const description = `Balance Adjustment: ${difference > 0 ? 'Added' : 'Removed'} ₨${amount.toLocaleString('en-PK')} (Manual Edit)`
+      
+      await createAccountTransaction({
+        type: transactionType,
+        amount: amount.toString(),
+        description: description
+      })
+      
+      // Refresh transactions to update the balance
+      const res = await getAccountTransactions()
+      setTransactions(res.results)
+      
+    } catch (error) {
+      console.error('Failed to update account balance:', error)
+      alert('Failed to update balance. Please try again.')
+    }
+  }
+
   return (
     <div className="space-y-4">
       {/* First Row - Total Products, Low Stock, Total Sales */}
@@ -116,60 +199,63 @@ export function DashboardStats() {
             <p className="text-lg font-medium">Products below threshold</p>
           </CardContent>
         </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-lg font-medium">Total Sales</CardTitle>
-            <DollarSign className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold">₨{Math.round(parseFloat(stats.total_sales)).toLocaleString('en-PK')}</div>
-            <p className="text-base text-muted-foreground">All time sales</p>
-          </CardContent>
-        </Card>
+        <EditableStatCard
+          title="Total Sales"
+          value={parseFloat(stats.total_sales)}
+          description="All time sales"
+          icon={<DollarSign className="h-4 w-4 text-muted-foreground" />}
+          onValueChange={(newValue) => handleStatUpdate('total_sales', newValue)}
+        />
       </div>
       {/* Second Row - Total Money, Purchases (toggle), Today's Sales */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        <Card onClick={() => setMoneyDialogOpen(true)} className="cursor-pointer hover:shadow-lg transition-shadow">
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-lg font-medium">Account Balance</CardTitle>
-            <DollarSign className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className={`text-3xl font-bold ${netBalance >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-              ₨{Math.round(netBalance).toLocaleString('en-PK')}
-            </div>
-            <p className="text-base text-muted-foreground">
-              {netBalance >= 0 ? 'Available balance' : 'Overdraft amount'}
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <div className="flex flex-col gap-1">
-              <CardTitle className="text-lg font-medium">{showTotalPurchases ? "Total Purchases" : "Today's Purchases"}</CardTitle>
-              <div className="flex items-center gap-2 mt-1">
-                <span className="text-base">Show</span>
-                <Switch checked={showTotalPurchases} onCheckedChange={setShowTotalPurchases} id="toggle-purchases" />
-                <span className="text-base">{showTotalPurchases ? "Total" : "Today"}</span>
-              </div>
-            </div>
-            <ShoppingCart className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold">₨{Math.round(parseFloat(showTotalPurchases ? stats.total_purchases : stats.today_purchases)).toLocaleString('en-PK')}</div>
-            <p className="text-base text-muted-foreground">{showTotalPurchases ? "All time purchases" : "Purchases made today"}</p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-            <CardTitle className="text-lg font-medium">Today&apos;s Sales</CardTitle>
-            <ShoppingBag className="h-4 w-4 text-muted-foreground" />
-          </CardHeader>
-          <CardContent>
-            <div className="text-3xl font-bold">₨{Math.round(parseFloat(stats.today_sales)).toLocaleString('en-PK')}</div>
-            <p className="text-base text-muted-foreground">Sales processed today</p>
-          </CardContent>
-        </Card>
+        <div className="relative">
+          <EditableStatCard
+            title="Account Balance"
+            value={netBalance}
+            description={netBalance >= 0 ? 'Available balance' : 'Overdraft amount'}
+            icon={<DollarSign className="h-4 w-4 text-muted-foreground" />}
+            onValueChange={(newValue) => handleBalanceUpdate(newValue)}
+            formatValue={(val) => {
+              const isPositive = val >= 0
+              return (
+                <span className={isPositive ? 'text-green-600' : 'text-red-600'}>
+                  ₨{Math.round(val).toLocaleString('en-PK')}
+                </span>
+              )
+            }}
+          />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setMoneyDialogOpen(true)}
+            className="absolute bottom-2 right-2 h-6 w-6 p-0 text-xs"
+            title="Add/Withdraw Money"
+          >
+            +/-
+          </Button>
+        </div>
+        <div className="relative">
+          <EditableStatCard
+            title={showTotalPurchases ? "Total Purchases" : "Today's Purchases"}
+            value={parseFloat(showTotalPurchases ? stats.total_purchases : stats.today_purchases)}
+            description={showTotalPurchases ? "All time purchases" : "Purchases made today"}
+            icon={<ShoppingCart className="h-4 w-4 text-muted-foreground" />}
+            onValueChange={(newValue) => handleStatUpdate(showTotalPurchases ? 'total_purchases' : 'today_purchases', newValue)}
+          />
+          <div className="absolute top-2 right-12 flex items-center gap-2">
+            <span className="text-xs">Show</span>
+            <Switch checked={showTotalPurchases} onCheckedChange={setShowTotalPurchases} id="toggle-purchases" />
+            <span className="text-xs">{showTotalPurchases ? "Total" : "Today"}</span>
+          </div>
+        </div>
+        <EditableStatCard
+          title="Today's Sales"
+          value={parseFloat(stats.today_sales)}
+          description="Sales processed today"
+          icon={<ShoppingBag className="h-4 w-4 text-muted-foreground" />}
+          onValueChange={(newValue) => handleStatUpdate('today_sales', newValue)}
+        />
       </div>
       <AccountMoneyDialog
         open={moneyDialogOpen}

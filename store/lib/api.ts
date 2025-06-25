@@ -150,7 +150,7 @@ class ApiClient {
     this.baseUrl = baseUrl;
   }
 
-  private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
     const config: RequestInit = {
       headers: {
@@ -197,7 +197,47 @@ class ApiClient {
   }
 
   // Products - Fetch all products by iterating through all pages
-  async getProducts(params?: URLSearchParams): Promise<{ results: Product[] }> {
+  // Products - Fetch paginated products (optimized for large datasets)
+  async getProducts(params?: URLSearchParams): Promise<{ 
+    results: Product[], 
+    count: number,
+    total_pages: number,
+    current_page: number,
+    page_size: number,
+    next: string | null,
+    previous: string | null,
+    has_next: boolean,
+    has_previous: boolean
+  }> {
+    const pageParams = new URLSearchParams(params || '');
+    
+    // Set default page size if not specified
+    if (!pageParams.has('page_size')) {
+      pageParams.set('page_size', '50'); // Optimized page size for products
+    }
+    
+    const query = pageParams.toString() ? `?${pageParams.toString()}` : '';
+    console.log(`Fetching products with query:`, query);
+    
+    const response = await this.request<{ 
+      results: Product[], 
+      count: number,
+      total_pages: number,
+      current_page: number,
+      page_size: number,
+      next: string | null,
+      previous: string | null,
+      has_next: boolean,
+      has_previous: boolean
+    }>(`/products/${query}`);
+    
+    console.log(`Fetched ${response.results.length} products (page ${response.current_page} of ${response.total_pages})`);
+    
+    return response;
+  }
+
+  // Products - Fetch all products (for cases where you need all data)
+  async getAllProducts(params?: URLSearchParams): Promise<{ results: Product[] }> {
     let allProducts: Product[] = [];
     let page = 1;
     let hasMore = true;
@@ -206,31 +246,18 @@ class ApiClient {
     
     while (hasMore) {
       try {
-        // Create new URLSearchParams for each page
         const pageParams = new URLSearchParams(params || '');
         pageParams.set('page', page.toString());
-        pageParams.set('page_size', '100'); // Use reasonable page size
+        pageParams.set('page_size', '100');
         
-        const query = `?${pageParams.toString()}`;
-        console.log(`Fetching page ${page} with query:`, query);
-        
-        const response = await this.request<{ 
-          results: Product[], 
-          next: string | null,
-          count: number,
-          previous: string | null
-        }>(`/products/${query}`);
-        
-        console.log(`Page ${page}: Got ${response.results.length} products`);
+        const response = await this.getProducts(pageParams);
         allProducts = [...allProducts, ...response.results];
         
-        // Check if there are more pages
-        hasMore = response.next !== null;
+        hasMore = response.has_next;
         page++;
         
-        // Safety break to prevent infinite loops
-        if (page > 100) {
-          console.warn('Reached maximum page limit (100), stopping pagination');
+        if (page > 50) { // Safety limit
+          console.warn('Reached maximum page limit (50), stopping pagination');
           break;
         }
       } catch (error) {
@@ -240,8 +267,6 @@ class ApiClient {
     }
     
     console.log(`Total products fetched: ${allProducts.length}`);
-    console.log('All product names:', allProducts.map(p => p.name).sort());
-    
     return { results: allProducts };
   }
 
@@ -258,7 +283,7 @@ class ApiClient {
 
   async updateProduct(id: number, product: Partial<Product>): Promise<Product> {
     return this.request<Product>(`/products/${id}/`, {
-      method: 'PUT',
+      method: 'PATCH',
       body: JSON.stringify(product),
     });
   }
@@ -269,8 +294,47 @@ class ApiClient {
     });
   }
 
-  // Sales Invoices - Get all invoices by fetching all pages
-  async getSalesInvoices(): Promise<{ results: SalesInvoice[] }> {
+  // Sales Invoices - Get paginated invoices (optimized for large datasets)
+  async getSalesInvoices(params?: URLSearchParams): Promise<{ 
+    results: SalesInvoice[], 
+    count: number,
+    total_pages: number,
+    current_page: number,
+    page_size: number,
+    next: string | null,
+    previous: string | null,
+    has_next: boolean,
+    has_previous: boolean
+  }> {
+    const pageParams = new URLSearchParams(params || '');
+    
+    // Set default page size if not specified
+    if (!pageParams.has('page_size')) {
+      pageParams.set('page_size', '25'); // Optimized page size for invoices
+    }
+    
+    const query = pageParams.toString() ? `?${pageParams.toString()}` : '';
+    console.log(`Fetching sales invoices with query:`, query);
+    
+    const response = await this.request<{ 
+      results: SalesInvoice[], 
+      count: number,
+      total_pages: number,
+      current_page: number,
+      page_size: number,
+      next: string | null,
+      previous: string | null,
+      has_next: boolean,
+      has_previous: boolean
+    }>(`/sales-invoices/${query}`);
+    
+    console.log(`Fetched ${response.results.length} sales invoices (page ${response.current_page} of ${response.total_pages})`);
+    
+    return response;
+  }
+
+  // Sales Invoices - Get all invoices by fetching all pages (for cases where you need all data)
+  async getAllSalesInvoices(params?: URLSearchParams): Promise<{ results: SalesInvoice[] }> {
     let allInvoices: SalesInvoice[] = [];
     let page = 1;
     let hasMore = true;
@@ -279,40 +343,27 @@ class ApiClient {
     
     while (hasMore) {
       try {
-        const pageParams = new URLSearchParams();
+        const pageParams = new URLSearchParams(params || '');
         pageParams.set('page', page.toString());
-        pageParams.set('page_size', '100'); // Get 100 items per page
+        pageParams.set('page_size', '100');
         
-        const query = `?${pageParams.toString()}`;
-        console.log(`Fetching sales invoices page ${page} with query:`, query);
-        
-        const response = await this.request<{ 
-          results: SalesInvoice[], 
-          next: string | null,
-          count: number,
-          previous: string | null
-        }>(`/sales-invoices/${query}`);
-        
-        console.log(`Sales invoices page ${page}: Got ${response.results.length} invoices`);
+        const response = await this.getSalesInvoices(pageParams);
         allInvoices = [...allInvoices, ...response.results];
         
-        // Check if there are more pages
-        hasMore = response.next !== null;
+        hasMore = response.has_next;
         page++;
         
-        // Safety break to prevent infinite loops
-        if (page > 100) {
+        if (page > 100) { // Safety limit
           console.warn('Reached maximum page limit (100), stopping pagination');
           break;
         }
       } catch (error) {
-        console.error(`Error fetching sales invoices page ${page}:`, error);
+        console.error(`Error fetching page ${page}:`, error);
         break;
       }
     }
     
     console.log(`Total sales invoices fetched: ${allInvoices.length}`);
-    
     return { results: allInvoices };
   }
 
@@ -343,8 +394,47 @@ class ApiClient {
     return this.request<LastSalePriceResponse>(`/sales-invoices/last_price/?customer_id=${customerId}&product_id=${productId}`);
   }
 
-  // Purchase Invoices - Get all invoices by fetching all pages
-  async getPurchaseInvoices(): Promise<{ results: PurchaseInvoice[] }> {
+  // Purchase Invoices - Get paginated invoices (optimized for large datasets)
+  async getPurchaseInvoices(params?: URLSearchParams): Promise<{ 
+    results: PurchaseInvoice[], 
+    count: number,
+    total_pages: number,
+    current_page: number,
+    page_size: number,
+    next: string | null,
+    previous: string | null,
+    has_next: boolean,
+    has_previous: boolean
+  }> {
+    const pageParams = new URLSearchParams(params || '');
+    
+    // Set default page size if not specified
+    if (!pageParams.has('page_size')) {
+      pageParams.set('page_size', '25'); // Optimized page size for invoices
+    }
+    
+    const query = pageParams.toString() ? `?${pageParams.toString()}` : '';
+    console.log(`Fetching purchase invoices with query:`, query);
+    
+    const response = await this.request<{ 
+      results: PurchaseInvoice[], 
+      count: number,
+      total_pages: number,
+      current_page: number,
+      page_size: number,
+      next: string | null,
+      previous: string | null,
+      has_next: boolean,
+      has_previous: boolean
+    }>(`/purchase-invoices/${query}`);
+    
+    console.log(`Fetched ${response.results.length} purchase invoices (page ${response.current_page} of ${response.total_pages})`);
+    
+    return response;
+  }
+
+  // Purchase Invoices - Get all invoices by fetching all pages (for cases where you need all data)
+  async getAllPurchaseInvoices(params?: URLSearchParams): Promise<{ results: PurchaseInvoice[] }> {
     let allInvoices: PurchaseInvoice[] = [];
     let page = 1;
     let hasMore = true;
@@ -353,40 +443,27 @@ class ApiClient {
     
     while (hasMore) {
       try {
-        const pageParams = new URLSearchParams();
+        const pageParams = new URLSearchParams(params || '');
         pageParams.set('page', page.toString());
-        pageParams.set('page_size', '100'); // Get 100 items per page
+        pageParams.set('page_size', '100');
         
-        const query = `?${pageParams.toString()}`;
-        console.log(`Fetching purchase invoices page ${page} with query:`, query);
-        
-        const response = await this.request<{ 
-          results: PurchaseInvoice[], 
-          next: string | null,
-          count: number,
-          previous: string | null
-        }>(`/purchase-invoices/${query}`);
-        
-        console.log(`Purchase invoices page ${page}: Got ${response.results.length} invoices`);
+        const response = await this.getPurchaseInvoices(pageParams);
         allInvoices = [...allInvoices, ...response.results];
         
-        // Check if there are more pages
-        hasMore = response.next !== null;
+        hasMore = response.has_next;
         page++;
         
-        // Safety break to prevent infinite loops
-        if (page > 100) {
+        if (page > 100) { // Safety limit
           console.warn('Reached maximum page limit (100), stopping pagination');
           break;
         }
       } catch (error) {
-        console.error(`Error fetching purchase invoices page ${page}:`, error);
+        console.error(`Error fetching page ${page}:`, error);
         break;
       }
     }
     
     console.log(`Total purchase invoices fetched: ${allInvoices.length}`);
-    
     return { results: allInvoices };
   }
 
@@ -450,6 +527,18 @@ class ApiClient {
     return this.request<DashboardStats>('/dashboard-stats/');
   }
 
+  async updateDashboardStats(data: {
+    total_sales?: string;
+    today_sales?: string;
+    total_purchases?: string;
+    today_purchases?: string;
+  }): Promise<DashboardStats> {
+    return this.request<DashboardStats>('/dashboard-stats/', {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  }
+
   // Suppliers
   async getSuppliers(): Promise<{ results: Supplier[] }> {
     return this.request<{ results: Supplier[] }>('/suppliers/');
@@ -497,21 +586,25 @@ export const apiClient = new ApiClient();
 
 // Export individual functions for convenience
 export const getProducts = (params?: URLSearchParams) => apiClient.getProducts(params);
+export const getAllProducts = (params?: URLSearchParams) => apiClient.getAllProducts(params);
 export const getProduct = (id: number) => apiClient.getProduct(id);
 export const createProduct = (product: Partial<Product>) => apiClient.createProduct(product);
 export const updateProduct = (id: number, product: Partial<Product>) => apiClient.updateProduct(id, product);
 export const deleteProduct = (id: number) => apiClient.deleteProduct(id);
-export const getSalesInvoices = () => apiClient.getSalesInvoices();
+export const getSalesInvoices = (params?: URLSearchParams) => apiClient.getSalesInvoices(params);
+export const getAllSalesInvoices = (params?: URLSearchParams) => apiClient.getAllSalesInvoices(params);
 export const getSalesInvoice = (id: number) => apiClient.getSalesInvoice(id);
 export const createSalesInvoice = (invoice: Parameters<typeof apiClient.createSalesInvoice>[0]) => apiClient.createSalesInvoice(invoice);
 export const deleteSalesInvoice = (id: number) => apiClient.deleteSalesInvoice(id);
-export const getPurchaseInvoices = () => apiClient.getPurchaseInvoices();
+export const getPurchaseInvoices = (params?: URLSearchParams) => apiClient.getPurchaseInvoices(params);
+export const getAllPurchaseInvoices = (params?: URLSearchParams) => apiClient.getAllPurchaseInvoices(params);
 export const getPurchaseInvoice = (id: number) => apiClient.getPurchaseInvoice(id);
 export const deletePurchaseInvoice = (id: number) => apiClient.deletePurchaseInvoice(id);
 export const createPurchaseInvoice = (invoice: Parameters<typeof apiClient.createPurchaseInvoice>[0]) => apiClient.createPurchaseInvoice(invoice);
 export const addLoanPayment = (invoiceId: number, payment: Parameters<typeof apiClient.addLoanPayment>[1]) => apiClient.addLoanPayment(invoiceId, payment);
 export const addSalesLoanPayment = (invoiceId: number, payment: Parameters<typeof apiClient.addSalesLoanPayment>[1]) => apiClient.addSalesLoanPayment(invoiceId, payment);
 export const getDashboardStats = () => apiClient.getDashboardStats();
+export const updateDashboardStats = (data: Parameters<typeof apiClient.updateDashboardStats>[0]) => apiClient.updateDashboardStats(data);
 export const getSuppliers = () => apiClient.getSuppliers();
 export const createSupplier = (supplier: Omit<Supplier, 'id' | 'created_at' | 'updated_at'>) => apiClient.createSupplier(supplier);
 export const getCustomers = () => apiClient.getCustomers();
