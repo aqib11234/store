@@ -3,7 +3,8 @@ from .models import (
     Supplier, Customer, Product,
     SalesInvoice, SalesInvoiceItem, SalesLoanPayment,
     PurchaseInvoice, PurchaseInvoiceItem, PurchaseLoanPayment,
-    AccountTransaction
+    AccountTransaction, CustomerLedger, SupplierLedger,
+    CustomerLedgerTransaction, SupplierLedgerTransaction
 )
 from django.db import IntegrityError
 import uuid
@@ -90,6 +91,10 @@ class CreateSalesInvoiceSerializer(serializers.ModelSerializer):
         is_loan = validated_data.get('is_loan', False)
         amount_paid = validated_data.get('amount_paid', 0)
 
+        # Ensure amount_paid defaults to 0 if not provided or empty
+        if amount_paid is None or amount_paid == '':
+            validated_data['amount_paid'] = 0
+
         # Generate descriptive invoice ID
         from .models import Customer
 
@@ -170,6 +175,9 @@ class CreateSalesInvoiceSerializer(serializers.ModelSerializer):
                 if is_loan and amount_paid > invoice.total:
                     raise serializers.ValidationError(f"Amount paid (₨{amount_paid}) cannot exceed total amount (₨{invoice.total})")
 
+                # Create ledger transaction
+                invoice.create_ledger_transaction()
+
                 return invoice
 
         except IntegrityError:
@@ -195,6 +203,8 @@ class CreateSalesInvoiceSerializer(serializers.ModelSerializer):
                 )
 
             invoice.calculate_totals()
+            # Create ledger transaction
+            invoice.create_ledger_transaction()
             return invoice
         except Exception as e:
             raise serializers.ValidationError(f"Error creating sales invoice: {str(e)}")
@@ -284,8 +294,8 @@ class CreatePurchaseInvoiceSerializer(serializers.ModelSerializer):
         is_loan = validated_data.get('is_loan', False)
         amount_paid = validated_data.get('amount_paid', 0)
 
-        # If not a loan, set amount_paid to 0 initially (will be set to total after calculation)
-        if not is_loan:
+        # Ensure amount_paid defaults to 0 if not provided or empty
+        if amount_paid is None or amount_paid == '':
             validated_data['amount_paid'] = 0
 
         try:
@@ -326,6 +336,9 @@ class CreatePurchaseInvoiceSerializer(serializers.ModelSerializer):
                 if is_loan and amount_paid > invoice.total:
                     raise serializers.ValidationError(f"Amount paid (₨{amount_paid}) cannot exceed total amount (₨{invoice.total})")
 
+                # Create ledger transaction
+                invoice.create_ledger_transaction()
+
                 return invoice
 
         except Exception as e:
@@ -348,3 +361,50 @@ class DashboardStatsSerializer(serializers.Serializer):
     today_purchases = serializers.DecimalField(max_digits=12, decimal_places=2)
     total_customers = serializers.IntegerField()
     total_suppliers = serializers.IntegerField()
+
+
+# Ledger Serializers
+class CustomerLedgerTransactionSerializer(serializers.ModelSerializer):
+    transaction_type_display = serializers.CharField(source='get_transaction_type_display', read_only=True)
+    customer_name = serializers.CharField(source='ledger.customer.name', read_only=True)
+
+    class Meta:
+        model = CustomerLedgerTransaction
+        fields = ['id', 'transaction_type', 'transaction_type_display', 'amount', 'description',
+                 'date', 'created_at', 'customer_name', 'reference_invoice', 'reference_payment']
+
+
+class SupplierLedgerTransactionSerializer(serializers.ModelSerializer):
+    transaction_type_display = serializers.CharField(source='get_transaction_type_display', read_only=True)
+    supplier_name = serializers.CharField(source='ledger.supplier.name', read_only=True)
+
+    class Meta:
+        model = SupplierLedgerTransaction
+        fields = ['id', 'transaction_type', 'transaction_type_display', 'amount', 'description',
+                 'date', 'created_at', 'supplier_name', 'reference_invoice', 'reference_payment']
+
+
+class CustomerLedgerSerializer(serializers.ModelSerializer):
+    customer_name = serializers.CharField(source='customer.name', read_only=True)
+    customer_phone = serializers.CharField(source='customer.phone', read_only=True)
+    customer_email = serializers.CharField(source='customer.email', read_only=True)
+    transactions = CustomerLedgerTransactionSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = CustomerLedger
+        fields = ['id', 'customer', 'customer_name', 'customer_phone', 'customer_email',
+                 'current_balance', 'total_sales', 'total_payments', 'credit_limit',
+                 'created_at', 'updated_at', 'transactions']
+
+
+class SupplierLedgerSerializer(serializers.ModelSerializer):
+    supplier_name = serializers.CharField(source='supplier.name', read_only=True)
+    supplier_phone = serializers.CharField(source='supplier.phone', read_only=True)
+    supplier_email = serializers.CharField(source='supplier.email', read_only=True)
+    transactions = SupplierLedgerTransactionSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = SupplierLedger
+        fields = ['id', 'supplier', 'supplier_name', 'supplier_phone', 'supplier_email',
+                 'current_balance', 'total_purchases', 'total_payments',
+                 'created_at', 'updated_at', 'transactions']

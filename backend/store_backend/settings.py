@@ -96,12 +96,8 @@ WSGI_APPLICATION = "store_backend.wsgi.application"
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": config('DATABASE_NAME', default='store_db'),
-        "USER": config('DATABASE_USER', default='store_user'),
-        "PASSWORD": config('DATABASE_PASSWORD', default='store_password123'),
-        "HOST": config('DATABASE_HOST', default='localhost'),
-        "PORT": config('DATABASE_PORT', default='5432'),
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "db.sqlite3",
     }
 }
 
@@ -191,7 +187,7 @@ REST_FRAMEWORK = {
 # CORS settings
 CORS_ALLOWED_ORIGINS = config(
     'CORS_ALLOWED_ORIGINS',
-    default='http://localhost:3000,http://127.0.0.1:3000,https://aqib11234.github.io,https://tajjamul-traders.netlify.app',
+    default='http://localhost:3000,http://127.0.0.1:3000,http://localhost:3001,http://127.0.0.1:3001,http://192.168.16.120:3000,http://192.168.16.120:3001,https://aqib11234.github.io,https://tajjamul-traders.netlify.app',
     cast=lambda v: [s.strip() for s in v.split(',')]
 )
 

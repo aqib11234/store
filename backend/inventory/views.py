@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from django_filters.rest_framework import DjangoFilterBackend
 from rest_framework.filters import SearchFilter, OrderingFilter
 from django.db.models import Sum, Count, Prefetch
+from django.db import models
 from django.utils import timezone
 from datetime import date
 
@@ -11,7 +12,8 @@ from .models import (
     Supplier, Customer, Product,
     SalesInvoice, SalesInvoiceItem,
     PurchaseInvoice, PurchaseInvoiceItem, PurchaseLoanPayment,
-    AccountTransaction
+    AccountTransaction, CustomerLedger, SupplierLedger,
+    CustomerLedgerTransaction, SupplierLedgerTransaction
 )
 from .serializers import (
     SupplierSerializer, CustomerSerializer, ProductSerializer,
@@ -20,7 +22,9 @@ from .serializers import (
     PurchaseInvoiceSerializer, PurchaseInvoiceItemSerializer,
     CreatePurchaseInvoiceSerializer,
     DashboardStatsSerializer,
-    AccountTransactionSerializer
+    AccountTransactionSerializer,
+    CustomerLedgerSerializer, SupplierLedgerSerializer,
+    CustomerLedgerTransactionSerializer, SupplierLedgerTransactionSerializer
 )
 from .pagination import (
     CustomPageNumberPagination, 
@@ -410,3 +414,91 @@ def dashboard_stats(request):
             {'error': str(e)},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
+
+
+class CustomerLedgerViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for customer ledger accounts"""
+    queryset = CustomerLedger.objects.select_related('customer').prefetch_related(
+        'transactions__reference_invoice',
+        'transactions__reference_payment'
+    ).all()
+    serializer_class = CustomerLedgerSerializer
+    pagination_class = CustomPageNumberPagination
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    search_fields = ['customer__name', 'customer__phone', 'customer__email']
+    ordering_fields = ['current_balance', 'total_sales', 'total_payments', 'customer__name']
+    ordering = ['customer__name']
+
+    @action(detail=True, methods=['get'])
+    def transactions(self, request, pk=None):
+        """Get all transactions for a specific customer ledger"""
+        ledger = self.get_object()
+        transactions = ledger.transactions.all()
+
+        # Apply pagination
+        page = self.paginate_queryset(transactions)
+        if page is not None:
+            serializer = CustomerLedgerTransactionSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = CustomerLedgerTransactionSerializer(transactions, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        """Get summary of all customer ledgers"""
+        total_customers = CustomerLedger.objects.count()
+        total_receivables = CustomerLedger.objects.aggregate(
+            total=models.Sum('current_balance')
+        )['total'] or 0
+        customers_with_balance = CustomerLedger.objects.filter(current_balance__gt=0).count()
+
+        return Response({
+            'total_customers': total_customers,
+            'total_receivables': total_receivables,
+            'customers_with_balance': customers_with_balance,
+        })
+
+
+class SupplierLedgerViewSet(viewsets.ReadOnlyModelViewSet):
+    """ViewSet for supplier ledger accounts"""
+    queryset = SupplierLedger.objects.select_related('supplier').prefetch_related(
+        'transactions__reference_invoice',
+        'transactions__reference_payment'
+    ).all()
+    serializer_class = SupplierLedgerSerializer
+    pagination_class = CustomPageNumberPagination
+    filter_backends = [DjangoFilterBackend, SearchFilter, OrderingFilter]
+    search_fields = ['supplier__name', 'supplier__phone', 'supplier__email']
+    ordering_fields = ['current_balance', 'total_purchases', 'total_payments', 'supplier__name']
+    ordering = ['supplier__name']
+
+    @action(detail=True, methods=['get'])
+    def transactions(self, request, pk=None):
+        """Get all transactions for a specific supplier ledger"""
+        ledger = self.get_object()
+        transactions = ledger.transactions.all()
+
+        # Apply pagination
+        page = self.paginate_queryset(transactions)
+        if page is not None:
+            serializer = SupplierLedgerTransactionSerializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = SupplierLedgerTransactionSerializer(transactions, many=True)
+        return Response(serializer.data)
+
+    @action(detail=False, methods=['get'])
+    def summary(self, request):
+        """Get summary of all supplier ledgers"""
+        total_suppliers = SupplierLedger.objects.count()
+        total_payables = SupplierLedger.objects.aggregate(
+            total=models.Sum('current_balance')
+        )['total'] or 0
+        suppliers_with_balance = SupplierLedger.objects.filter(current_balance__gt=0).count()
+
+        return Response({
+            'total_suppliers': total_suppliers,
+            'total_payables': total_payables,
+            'suppliers_with_balance': suppliers_with_balance,
+        })

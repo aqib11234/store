@@ -1,5 +1,7 @@
 from django.db import models
 from django.core.validators import MinValueValidator
+from django.db.models.signals import post_save
+from django.dispatch import receiver
 from decimal import Decimal
 
 
@@ -118,20 +120,14 @@ class SalesInvoice(models.Model):
         self.total = self.subtotal  # Total equals subtotal (no tax)
 
         # Update remaining balance and payment status
-        if self.is_loan:
-            self.remaining_balance = self.total - self.amount_paid
-            if self.amount_paid >= self.total:
-                self.payment_status = 'paid'
-                self.remaining_balance = 0
-            elif self.amount_paid > 0:
-                self.payment_status = 'partial'
-            else:
-                self.payment_status = 'unpaid'
-        else:
-            # If not a loan, mark as fully paid
-            self.amount_paid = self.total
-            self.remaining_balance = 0
+        self.remaining_balance = self.total - self.amount_paid
+        if self.amount_paid >= self.total:
             self.payment_status = 'paid'
+            self.remaining_balance = 0
+        elif self.amount_paid > 0:
+            self.payment_status = 'partial'
+        else:
+            self.payment_status = 'unpaid'
 
         self.save()
 
@@ -156,6 +152,37 @@ class SalesInvoice(models.Model):
         # Update invoice payment status
         self.amount_paid += amount
         self.calculate_totals()  # This will update payment status and remaining balance
+
+    def create_ledger_transaction(self):
+        """Create ledger transaction for this sales invoice"""
+        from django.utils import timezone
+
+        # Get or create customer ledger
+        customer_ledger, created = CustomerLedger.objects.get_or_create(customer=self.customer)
+
+        # Create sale transaction
+        CustomerLedgerTransaction.objects.create(
+            ledger=customer_ledger,
+            transaction_type='sale',
+            amount=self.total,
+            description=f"Sale Invoice {self.invoice_id}",
+            reference_invoice=self,
+            date=timezone.make_aware(timezone.datetime.combine(self.date, timezone.datetime.min.time()))
+        )
+
+        # Create payment transaction if amount was paid
+        if self.amount_paid > 0:
+            CustomerLedgerTransaction.objects.create(
+                ledger=customer_ledger,
+                transaction_type='payment',
+                amount=self.amount_paid,
+                description=f"Payment for Invoice {self.invoice_id}",
+                reference_invoice=self,
+                date=timezone.now()
+            )
+
+        # Update ledger balance
+        customer_ledger.update_balance()
 
     def __str__(self):
         return f"{self.invoice_id} - {self.customer.name}"
@@ -242,20 +269,14 @@ class PurchaseInvoice(models.Model):
         self.total = self.subtotal  # Total equals subtotal (no tax)
 
         # Update remaining balance and payment status
-        if self.is_loan:
-            self.remaining_balance = self.total - self.amount_paid
-            if self.amount_paid >= self.total:
-                self.payment_status = 'paid'
-                self.remaining_balance = 0
-            elif self.amount_paid > 0:
-                self.payment_status = 'partial'
-            else:
-                self.payment_status = 'unpaid'
-        else:
-            # If not a loan, mark as fully paid
-            self.amount_paid = self.total
-            self.remaining_balance = 0
+        self.remaining_balance = self.total - self.amount_paid
+        if self.amount_paid >= self.total:
             self.payment_status = 'paid'
+            self.remaining_balance = 0
+        elif self.amount_paid > 0:
+            self.payment_status = 'partial'
+        else:
+            self.payment_status = 'unpaid'
 
         self.save()
 
@@ -280,6 +301,37 @@ class PurchaseInvoice(models.Model):
         # Update invoice payment status
         self.amount_paid += amount
         self.calculate_totals()  # This will update payment status and remaining balance
+
+    def create_ledger_transaction(self):
+        """Create ledger transaction for this purchase invoice"""
+        from django.utils import timezone
+
+        # Get or create supplier ledger
+        supplier_ledger, created = SupplierLedger.objects.get_or_create(supplier=self.supplier)
+
+        # Create purchase transaction
+        SupplierLedgerTransaction.objects.create(
+            ledger=supplier_ledger,
+            transaction_type='purchase',
+            amount=self.total,
+            description=f"Purchase Invoice {self.invoice_id}",
+            reference_invoice=self,
+            date=timezone.make_aware(timezone.datetime.combine(self.date, timezone.datetime.min.time()))
+        )
+
+        # Create payment transaction if amount was paid
+        if self.amount_paid > 0:
+            SupplierLedgerTransaction.objects.create(
+                ledger=supplier_ledger,
+                transaction_type='payment',
+                amount=self.amount_paid,
+                description=f"Payment for Invoice {self.invoice_id}",
+                reference_invoice=self,
+                date=timezone.now()
+            )
+
+        # Update ledger balance
+        supplier_ledger.update_balance()
 
     def __str__(self):
         return f"{self.invoice_id} - {self.supplier.name}"
@@ -348,3 +400,125 @@ class AccountTransaction(models.Model):
 
     class Meta:
         ordering = ['-date']
+
+
+class CustomerLedger(models.Model):
+    """Model for customer ledger accounts - tracks all financial transactions with customers"""
+    customer = models.OneToOneField(Customer, on_delete=models.CASCADE, related_name='ledger')
+    current_balance = models.DecimalField(max_digits=12, decimal_places=2, default=0, help_text="Current outstanding balance (positive = customer owes us)")
+    total_sales = models.DecimalField(max_digits=12, decimal_places=2, default=0, help_text="Total sales amount to this customer")
+    total_payments = models.DecimalField(max_digits=12, decimal_places=2, default=0, help_text="Total payments received from this customer")
+    credit_limit = models.DecimalField(max_digits=12, decimal_places=2, default=0, help_text="Maximum credit allowed for this customer")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.customer.name} - Balance: ₨{self.current_balance}"
+
+    def update_balance(self):
+        """Recalculate balance from all transactions"""
+        transactions = self.transactions.all()
+        self.current_balance = sum(t.amount if t.transaction_type in ['sale', 'interest'] else -t.amount
+                                 for t in transactions)
+        self.total_sales = sum(t.amount for t in transactions if t.transaction_type == 'sale')
+        self.total_payments = sum(t.amount for t in transactions if t.transaction_type == 'payment')
+        self.save()
+
+    class Meta:
+        ordering = ['customer__name']
+
+
+class SupplierLedger(models.Model):
+    """Model for supplier ledger accounts - tracks all financial transactions with suppliers"""
+    supplier = models.OneToOneField(Supplier, on_delete=models.CASCADE, related_name='ledger')
+    current_balance = models.DecimalField(max_digits=12, decimal_places=2, default=0, help_text="Current outstanding balance (positive = we owe supplier)")
+    total_purchases = models.DecimalField(max_digits=12, decimal_places=2, default=0, help_text="Total purchase amount from this supplier")
+    total_payments = models.DecimalField(max_digits=12, decimal_places=2, default=0, help_text="Total payments made to this supplier")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"{self.supplier.name} - Balance: ₨{self.current_balance}"
+
+    def update_balance(self):
+        """Recalculate balance from all transactions"""
+        transactions = self.transactions.all()
+        self.current_balance = sum(t.amount if t.transaction_type in ['purchase', 'interest'] else -t.amount
+                                 for t in transactions)
+        self.total_purchases = sum(t.amount for t in transactions if t.transaction_type == 'purchase')
+        self.total_payments = sum(t.amount for t in transactions if t.transaction_type == 'payment')
+        self.save()
+
+    class Meta:
+        ordering = ['supplier__name']
+
+
+class CustomerLedgerTransaction(models.Model):
+    """Model for individual customer ledger transactions"""
+    TRANSACTION_TYPE_CHOICES = [
+        ('sale', 'Sale'),
+        ('payment', 'Payment Received'),
+        ('return', 'Sale Return'),
+        ('discount', 'Discount Given'),
+        ('interest', 'Interest Charged'),
+        ('adjustment', 'Balance Adjustment'),
+    ]
+
+    ledger = models.ForeignKey(CustomerLedger, on_delete=models.CASCADE, related_name='transactions')
+    transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPE_CHOICES)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal('0.01'))])
+    description = models.TextField()
+    reference_invoice = models.ForeignKey('SalesInvoice', on_delete=models.SET_NULL, null=True, blank=True)
+    reference_payment = models.ForeignKey('SalesLoanPayment', on_delete=models.SET_NULL, null=True, blank=True)
+    date = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.CharField(max_length=100, default='system')
+
+    def __str__(self):
+        return f"{self.ledger.customer.name} - {self.get_transaction_type_display()} ₨{self.amount}"
+
+    class Meta:
+        ordering = ['-date', '-created_at']
+
+
+class SupplierLedgerTransaction(models.Model):
+    """Model for individual supplier ledger transactions"""
+    TRANSACTION_TYPE_CHOICES = [
+        ('purchase', 'Purchase'),
+        ('payment', 'Payment Made'),
+        ('return', 'Purchase Return'),
+        ('discount', 'Discount Received'),
+        ('interest', 'Interest Charged'),
+        ('adjustment', 'Balance Adjustment'),
+    ]
+
+    ledger = models.ForeignKey(SupplierLedger, on_delete=models.CASCADE, related_name='transactions')
+    transaction_type = models.CharField(max_length=20, choices=TRANSACTION_TYPE_CHOICES)
+    amount = models.DecimalField(max_digits=12, decimal_places=2, validators=[MinValueValidator(Decimal('0.01'))])
+    description = models.TextField()
+    reference_invoice = models.ForeignKey('PurchaseInvoice', on_delete=models.SET_NULL, null=True, blank=True)
+    reference_payment = models.ForeignKey('PurchaseLoanPayment', on_delete=models.SET_NULL, null=True, blank=True)
+    date = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    created_by = models.CharField(max_length=100, default='system')
+
+    def __str__(self):
+        return f"{self.ledger.supplier.name} - {self.get_transaction_type_display()} ₨{self.amount}"
+
+    class Meta:
+        ordering = ['-date', '-created_at']
+
+
+# Signal handlers to automatically create ledger accounts
+@receiver(post_save, sender=Customer)
+def create_customer_ledger(sender, instance, created, **kwargs):
+    """Create a ledger account when a new customer is created"""
+    if created:
+        CustomerLedger.objects.create(customer=instance)
+
+
+@receiver(post_save, sender=Supplier)
+def create_supplier_ledger(sender, instance, created, **kwargs):
+    """Create a ledger account when a new supplier is created"""
+    if created:
+        SupplierLedger.objects.create(supplier=instance)

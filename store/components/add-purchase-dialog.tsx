@@ -33,12 +33,23 @@ export function AddPurchaseDialog({ onPurchaseAdded }: AddPurchaseDialogProps) {
   const [isLoan, setIsLoan] = useState(false)
   const [amountPaid, setAmountPaid] = useState<number>(0)
   const [notes, setNotes] = useState("")
+  const [supplierBalance, setSupplierBalance] = useState<number | null>(null)
+  const [loadingBalance, setLoadingBalance] = useState(false)
 
   useEffect(() => {
     if (open) {
       loadData()
     }
   }, [open])
+
+  // Fetch supplier balance when supplier changes
+  useEffect(() => {
+    if (selectedSupplier) {
+      fetchSupplierBalance(selectedSupplier)
+    } else {
+      setSupplierBalance(null)
+    }
+  }, [selectedSupplier])
 
   const loadData = async () => {
     try {
@@ -64,6 +75,33 @@ export function AddPurchaseDialog({ onPurchaseAdded }: AddPurchaseDialogProps) {
       setAmountPaid(0)
       setNotes("")
       setLoading(false)
+      setSupplierBalance(null)
+      setLoadingBalance(false)
+    }
+  }
+
+  // Fetch supplier balance when supplier is selected
+  const fetchSupplierBalance = async (supplierId: number) => {
+    if (!supplierId) {
+      setSupplierBalance(null)
+      return
+    }
+
+    try {
+      setLoadingBalance(true)
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/supplier-ledgers/?supplier=${supplierId}`)
+      const data = await response.json()
+
+      if (data.results && data.results.length > 0) {
+        setSupplierBalance(data.results[0].current_balance)
+      } else {
+        setSupplierBalance(0)
+      }
+    } catch (error) {
+      console.error('Error fetching supplier balance:', error)
+      setSupplierBalance(null)
+    } finally {
+      setLoadingBalance(false)
     }
   }
 
@@ -101,7 +139,7 @@ export function AddPurchaseDialog({ onPurchaseAdded }: AddPurchaseDialogProps) {
     }
 
     const total = calculateTotal()
-    if (isLoan && amountPaid > total) {
+    if (amountPaid > total) {
       toast.error('Amount paid cannot exceed total amount')
       return
     }
@@ -119,13 +157,13 @@ export function AddPurchaseDialog({ onPurchaseAdded }: AddPurchaseDialogProps) {
         })),
         notes,
         is_loan: isLoan,
-        amount_paid: isLoan ? amountPaid : total // If not a loan, mark as fully paid
+        amount_paid: amountPaid // Always use the user's input for amount paid
       }
 
       const invoice = await createPurchaseInvoice(purchaseData)
       
       // Create account transaction for the amount paid
-      const paidAmount = isLoan ? amountPaid : total
+      const paidAmount = amountPaid
       if (paidAmount > 0) {
         try {
           const supplierName = suppliers.find(s => s.id === selectedSupplier)?.name || 'Unknown Supplier'
@@ -146,7 +184,8 @@ export function AddPurchaseDialog({ onPurchaseAdded }: AddPurchaseDialogProps) {
         }
       }
       
-      toast.success(`Purchase invoice created successfully!${isLoan ? ` Remaining balance: ₨${(total - amountPaid).toLocaleString('en-PK')}` : ''}`)
+      const remainingBalance = total - amountPaid
+      toast.success(`Purchase invoice created successfully!${remainingBalance > 0 ? ` Remaining balance: ₨${remainingBalance.toLocaleString('en-PK')}` : ' Fully paid!'}`)
       
       handleOpenChange(false)
       onPurchaseAdded?.()
@@ -304,25 +343,42 @@ export function AddPurchaseDialog({ onPurchaseAdded }: AddPurchaseDialogProps) {
               </Label>
             </div>
 
-            {isLoan && (
-              <div className="space-y-2">
-                <Label htmlFor="amount-paid">Amount Paid (₨)</Label>
-                <Input
-                  id="amount-paid"
-                  type="number"
-                  step="0.01"
-                  min="0"
-                  max={total}
-                  value={amountPaid}
-                  onChange={(e) => setAmountPaid(parseFloat(e.target.value) || 0)}
-                  placeholder="0.00"
-                />
-                <div className="text-sm text-gray-600">
-                  Total: ₨{total.toLocaleString('en-PK')} | 
-                  Remaining: ₨{(total - amountPaid).toLocaleString('en-PK')}
-                </div>
+            {/* Supplier Balance Display */}
+            {supplierBalance !== null && (
+              <div className={`p-2 rounded text-sm ${
+                supplierBalance > 0
+                  ? 'bg-red-50 border border-red-200 text-red-800'
+                  : supplierBalance < 0
+                    ? 'bg-green-50 border border-green-200 text-green-800'
+                    : 'bg-gray-50 border border-gray-200 text-gray-800'
+              }`}>
+                💰 Supplier Previous Balance: {supplierBalance > 0 ? 'We Owe' : supplierBalance < 0 ? 'Advance' : 'Clear'} ₨{Math.abs(supplierBalance).toLocaleString('en-PK')}
+                {supplierBalance > 0 && (
+                  <div className="text-xs mt-1">
+                    New Total with Previous Balance: ₨{(total + supplierBalance).toLocaleString('en-PK')}
+                  </div>
+                )}
               </div>
             )}
+
+            <div className="space-y-2">
+              <Label htmlFor="amount-paid">Amount Paid (₨)</Label>
+              <Input
+                id="amount-paid"
+                type="number"
+                step="0.01"
+                min="0"
+                max={total}
+                value={amountPaid}
+                onChange={(e) => setAmountPaid(parseFloat(e.target.value) || 0)}
+                placeholder="0.00"
+              />
+              <div className="text-sm text-gray-600">
+                Total: ₨{total.toLocaleString('en-PK')} |
+                Remaining: ₨{(total - amountPaid).toLocaleString('en-PK')}
+                {amountPaid === 0 && " (Leave empty or 0 for unpaid invoice)"}
+              </div>
+            </div>
           </div>
 
           {/* Notes */}

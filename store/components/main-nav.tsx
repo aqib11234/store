@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { Button } from "@/components/ui/button"
-import { LayoutDashboard, FileText, DollarSign } from "lucide-react"
+import { LayoutDashboard, FileText, DollarSign, BookOpen } from "lucide-react"
 
 export function MainNav() {
   const pathname = usePathname()
@@ -26,6 +26,12 @@ export function MainNav() {
         <Link href="/account-invoices">
           <DollarSign className="mr-2 h-5 w-5" />
           Account Invoices
+        </Link>
+      </Button>
+      <Button asChild variant={pathname === "/ledger" ? "default" : "ghost"} className="justify-start text-base">
+        <Link href="/ledger">
+          <BookOpen className="mr-2 h-5 w-5" />
+          Ledger
         </Link>
       </Button>
     </nav>

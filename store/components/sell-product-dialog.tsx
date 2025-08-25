@@ -47,6 +47,8 @@ export function SellProductDialog({ onSaleCompleted }: SellProductDialogProps) {
   const [lastSaleDate, setLastSaleDate] = useState<string | null>(null)
   const [customPrice, setCustomPrice] = useState("")
   const [useCustomPrice, setUseCustomPrice] = useState(false)
+  const [customerBalance, setCustomerBalance] = useState<number | null>(null)
+  const [loadingBalance, setLoadingBalance] = useState(false)
 
   // Clear form when dialog is closed
   const handleOpenChange = (newOpen: boolean) => {
@@ -84,6 +86,38 @@ export function SellProductDialog({ onSaleCompleted }: SellProductDialogProps) {
       setLastSaleDate(null)
       setCustomPrice("")
       setUseCustomPrice(false)
+      setCustomerBalance(null)
+      setLoadingBalance(false)
+    }
+
+    // Fetch customer balance when customer changes
+    if (selectedCustomer) {
+      fetchCustomerBalance(selectedCustomer)
+    }
+  }, [selectedCustomer, selectedProduct])
+
+  // Fetch customer balance when customer is selected
+  const fetchCustomerBalance = async (customerId: string) => {
+    if (!customerId) {
+      setCustomerBalance(null)
+      return
+    }
+
+    try {
+      setLoadingBalance(true)
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/customer-ledgers/?customer=${customerId}`)
+      const data = await response.json()
+
+      if (data.results && data.results.length > 0) {
+        setCustomerBalance(data.results[0].current_balance)
+      } else {
+        setCustomerBalance(0)
+      }
+    } catch (error) {
+      console.error('Error fetching customer balance:', error)
+      setCustomerBalance(null)
+    } finally {
+      setLoadingBalance(false)
     }
   }, [selectedCustomer, selectedProduct])
 
@@ -562,6 +596,25 @@ export function SellProductDialog({ onSaleCompleted }: SellProductDialogProps) {
               <DialogTitle>Customer Payment Details</DialogTitle>
               <DialogDescription>
                 Enter payment details for this sale (Total: {formatCurrency(calculateTotal(), 0)})
+
+                {/* Customer Balance Display */}
+                {customerBalance !== null && (
+                  <div className={`mt-2 p-2 rounded text-sm ${
+                    customerBalance > 0
+                      ? 'bg-red-50 border border-red-200 text-red-800'
+                      : customerBalance < 0
+                        ? 'bg-green-50 border border-green-200 text-green-800'
+                        : 'bg-gray-50 border border-gray-200 text-gray-800'
+                  }`}>
+                    💰 Customer Previous Balance: {customerBalance > 0 ? 'Owes' : customerBalance < 0 ? 'Credit' : 'Clear'} {formatCurrency(Math.abs(customerBalance), 0)}
+                    {customerBalance > 0 && (
+                      <div className="text-xs mt-1">
+                        New Total with Previous Balance: {formatCurrency(calculateTotal() + customerBalance, 0)}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {saleItems.some(item => item.wasSuggested) && (
                   <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded text-sm">
                     💡 This sale includes {saleItems.filter(item => item.wasSuggested).length} item(s) with suggested pricing based on previous sales to this customer.
